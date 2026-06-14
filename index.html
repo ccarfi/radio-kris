@@ -154,7 +154,6 @@
       <div class="scrub bevel-in"><div id="scrub" class="scrub-fill"></div></div>
       <div class="transport">
         <button id="btn-tune">▶ TUNE IN</button>
-        <button id="btn-first" disabled>⏮ FIRST</button>
         <button id="btn-add">＋ ADD</button>
         <button id="btn-gong" class="gong" disabled>🪧🟡 GONG!</button>
       </div>
@@ -427,7 +426,6 @@ function tuneIn(){
   tunedIn = true;
   $('btn-tune').textContent = '⏸ TUNED IN';
   $('btn-gong').disabled = false;
-  $('btn-first').disabled = false;
   // unlock WebAudio for the gong sound (needs a user gesture)
   try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); audioCtx.resume(); }catch(e){}
   if (player && player.loadVideoById){ loadCurrent(true); player.playVideo && player.playVideo(); }
@@ -613,7 +611,6 @@ $('hello').onclick = editHandle;
 $('btn-tune').onclick = ()=>{ if(!tunedIn) tuneIn(); };
 $('btn-gong').onclick = doGong;
 $('btn-add').onclick = openSearch;
-$('btn-first').onclick = ()=>{ const q=(state&&state.queue)||[]; if(q.length) playTrack(q[0]); };
 $('station-sel').onchange = e=> switchStation(e.target.value);
 $('search-go').onclick = runSearch;
 $('search-close').onclick = closeSearch;
