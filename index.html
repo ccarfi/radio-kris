@@ -210,7 +210,8 @@ let state = null;            // last server state
 let clockOffset = 0;         // serverNow - clientNow
 let player = null;           // YT.Player
 let ytReady = false;
-let tunedIn = false;
+let tunedIn = false;         // has joined the broadcast (first gesture done)
+let playing = false;         // currently listening (false = locally paused)
 let loadedVideoId = '';
 let lastGongAtSeen = 0;
 let pendingAdvance = false;
@@ -369,7 +370,12 @@ function loadCurrent(seek){
   if (!t || !player || !player.loadVideoById) return;
   const pos = computedPos();
   loadedVideoId = t.videoId;
-  player.loadVideoById({ videoId: t.videoId, startSeconds: Math.max(0,pos) });
+  // when paused, cue (load silently) so a track change / gong doesn't blast audio
+  if (playing){
+    player.loadVideoById({ videoId: t.videoId, startSeconds: Math.max(0,pos) });
+  } else {
+    player.cueVideoById({ videoId: t.videoId, startSeconds: Math.max(0,pos) });
+  }
 }
 
 async function requestAdvance(force){
@@ -398,7 +404,9 @@ function tick(){
   $('np-time').textContent = fmt(pos);
   $('scrub').style.width = (total>0 ? Math.min(100, pos/total*100) : 0) + '%';
 
-  if (!tunedIn || !t){ $('np-state').textContent = tunedIn ? 'ON AIR' : 'OFF AIR'; return; }
+  if (!tunedIn){ $('np-state').textContent = 'OFF AIR'; return; }
+  if (!playing){ $('np-state').textContent = 'PAUSED'; return; }
+  if (!t){ $('np-state').textContent = 'ON AIR'; return; }
 
   // boundary reached → advance for everyone
   if (total>0 && pos >= total - 0.15){ requestAdvance(false); return; }
@@ -418,18 +426,53 @@ function tick(){
 
 // resync when returning to the tab
 document.addEventListener('visibilitychange', ()=>{
-  if (!document.hidden && tunedIn){ const t=curTrack(); if (t) player && player.seekTo(computedPos(), true); }
+  if (!document.hidden && tunedIn && playing){ const t=curTrack(); if (t) player && player.seekTo(computedPos(), true); }
 });
 
-/* ============================ TUNE IN ============================ */
+/* ============================ TUNE IN / PLAY-PAUSE ============================ */
+function updateTuneButton(){
+  const b = $('btn-tune');
+  if (!tunedIn) b.textContent = '▶ TUNE IN';
+  else if (playing) b.textContent = '⏸ PAUSE';
+  else b.textContent = '▶ RESUME';
+}
+
+// the TUNE IN button: first tap joins, after that it's a play/pause toggle
+function onTuneButton(){
+  if (!tunedIn) tuneIn();
+  else if (playing) pausePlayback();
+  else resumePlayback();
+}
+
 function tuneIn(){
   tunedIn = true;
-  $('btn-tune').textContent = '⏸ TUNED IN';
+  playing = true;
+  updateTuneButton();
   $('btn-gong').disabled = false;
   // unlock WebAudio for the gong sound (needs a user gesture)
   try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); audioCtx.resume(); }catch(e){}
   if (player && player.loadVideoById){ loadCurrent(true); player.playVideo && player.playVideo(); }
   startHeartbeat();
+}
+
+// pause is local-only; the shared station clock keeps running
+function pausePlayback(){
+  playing = false;
+  updateTuneButton();
+  if (player && player.pauseVideo) player.pauseVideo();
+  stopHeartbeat();            // drop out of the listener count while paused
+  $('np-state').textContent = 'PAUSED';
+}
+
+// resume = re-join the LIVE broadcast (snap to current position, not where we paused)
+function resumePlayback(){
+  playing = true;
+  updateTuneButton();
+  startHeartbeat();
+  const t = curTrack();
+  if (!t || !player) return;
+  if (loadedVideoId !== t.videoId){ loadCurrent(true); }      // track changed while paused → load live
+  else { player.seekTo(computedPos(), true); player.playVideo && player.playVideo(); }
 }
 
 /* ============================ HEARTBEAT / PRESENCE ============================ */
@@ -446,6 +489,7 @@ function startHeartbeat(){
   ping();
   hbTimer = setInterval(ping, CONFIG.heartbeatMs);
 }
+function stopHeartbeat(){ if (hbTimer){ clearInterval(hbTimer); hbTimer = null; } }
 
 /* ============================ GONG ============================ */
 async function doGong(){
@@ -587,7 +631,7 @@ async function switchStation(name){
   state = null; loadedVideoId=''; lastGongAtSeen=0;
   $('presence').textContent='— tuning in';
   await pollState();
-  if (tunedIn){ const t=curTrack(); if (t) loadCurrent(true); startHeartbeat(); }
+  if (tunedIn){ const t=curTrack(); if (t) loadCurrent(true); if (playing) startHeartbeat(); }
 }
 
 function setHandle(){
@@ -608,7 +652,7 @@ $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') tryUnlock(); });
 $('handle-go').onclick = setHandle;
 $('handle-in').addEventListener('keydown', e=>{ if(e.key==='Enter') setHandle(); });
 $('hello').onclick = editHandle;
-$('btn-tune').onclick = ()=>{ if(!tunedIn) tuneIn(); };
+$('btn-tune').onclick = onTuneButton;
 $('btn-gong').onclick = doGong;
 $('btn-add').onclick = openSearch;
 $('station-sel').onchange = e=> switchStation(e.target.value);
