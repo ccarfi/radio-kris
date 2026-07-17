@@ -196,7 +196,9 @@ const CONFIG = {
   // PASTE your Apps Script Web App /exec URL here:
   url: 'https://script.google.com/macros/s/AKfycbxOiy9chlEF8z8SeCjC5SO-RZzT94XKujhPzHXIu4GVYU0eW1vNgYFP7dYYKTPxcCQEsg/exec',
   authSalt: 'ef6cc100b3416ca73a69323d1e3b3ef1',
-  authHash: '7d522062184616b7716bc3c8fca7a593e8692032ce6206377d0326ac7fc34555',
+  // password validation is server-side now: any valid cohort password unlocks the
+  // app; the cohort just sets which playlist you land on. Manage cohorts in the
+  // Sheet's "Cohorts" tab (label / passwordHash / defaultStation).
   pollMs: 4000,        // how often to fetch shared state
   tickMs: 500,         // local UI / sync tick
   heartbeatMs: 15000,  // presence ping
@@ -206,6 +208,8 @@ const CONFIG = {
 /* ============================ STATE ============================ */
 let HANDLE = localStorage.getItem('rk_handle') || '';
 let station = localStorage.getItem('rk_station') || '';
+let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
+let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
 let clockOffset = 0;         // serverNow - clientNow
 let player = null;           // YT.Player
@@ -230,15 +234,26 @@ async function sha256hex(str){
 
 async function tryUnlock(){
   const pw = $('pw').value;
+  $('pw-err').textContent = 'checking…';
   const h = await sha256hex(CONFIG.authSalt + pw);
-  if (h === CONFIG.authHash){
-    localStorage.setItem('rk_unlocked', CONFIG.authHash);
-    $('gate').classList.add('hidden');
-    afterUnlock();
-  } else {
-    $('pw-err').textContent = 'wrong password';
-    $('pw').value = '';
-  }
+  const ok = await doLogin(h);
+  if (!ok){ $('pw-err').textContent = 'wrong password'; $('pw').value = ''; }
+}
+
+// validate a password hash against the server's cohort list; on success it
+// becomes our auth token and its cohort sets the landing playlist
+async function doLogin(hash){
+  authToken = hash;                       // api() sends this
+  let r;
+  try { r = await api('login'); } catch(e){ authToken=''; return false; }
+  if (!r || !r.ok){ authToken=''; return false; }
+  localStorage.setItem('rk_auth', hash);
+  defaultStation = r.defaultStation || '';
+  station = defaultStation || station;    // always land on the cohort's default
+  $('pw-err').textContent = '';
+  $('gate').classList.add('hidden');
+  afterUnlock();
+  return true;
 }
 
 function afterUnlock(){
@@ -251,7 +266,7 @@ async function api(action, params){
   if (CONFIG.url.indexOf('PASTE_') === 0){
     throw new Error('Set CONFIG.url to your Apps Script /exec URL');
   }
-  const body = Object.assign({ action, auth: CONFIG.authHash }, params || {});
+  const body = Object.assign({ action, auth: authToken }, params || {});
   const res = await fetch(CONFIG.url, {
     method:'POST',
     headers:{ 'Content-Type':'text/plain;charset=utf-8' },
@@ -660,11 +675,15 @@ $('search-go').onclick = runSearch;
 $('search-close').onclick = closeSearch;
 $('search-in').addEventListener('keydown', e=>{ if(e.key==='Enter') runSearch(); });
 
-// boot: skip gate if already unlocked this device
-if (localStorage.getItem('rk_unlocked') === CONFIG.authHash){
-  $('gate').classList.add('hidden');
-  afterUnlock();
-}
+// boot: if we have a saved cohort token, revalidate it (also refreshes the
+// landing playlist in case the cohort mapping changed); else show the gate
+(async ()=>{
+  const saved = localStorage.getItem('rk_auth');
+  if (saved){
+    const ok = await doLogin(saved);
+    if (!ok){ localStorage.removeItem('rk_auth'); }  // revoked/changed → gate stays visible
+  }
+})();
 </script>
 </body>
 </html>

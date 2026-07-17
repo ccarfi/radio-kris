@@ -26,6 +26,18 @@ var STATION_HEADERS = ['id', 'videoId', 'title', 'artist', 'durationSec', 'thumb
 var META_HEADERS = ['station', 'currentTrackId', 'trackStartedAt', 'lastGongBy', 'lastGongAt', 'lastActionAt'];
 var PRESENCE_HEADERS = ['station', 'handle', 'lastSeenAt'];
 
+// ---- Cohorts (password -> default landing playlist) -------------------------
+// Any valid cohort hash unlocks the whole app; the hash only picks the landing
+// station. All hashes use the single global AUTH_SALT.
+var COHORT_SHEET = 'Cohorts';
+var COHORT_HEADERS = ['label', 'passwordHash', 'defaultStation'];
+var SHEEPLE_HASH = '64f7004c837f7232900520bad14446f00dfe2874e90fc4e4929504da9536e555'; // SHA-256(salt + "baa-ram-ewe")
+// Seeded into the Cohorts tab if it's empty, so the app can never brick itself.
+var COHORT_SEED = [
+  ['Extricity', AUTH_HASH, 'Extricity Classics'],
+  ['We The Sheeple', SHEEPLE_HASH, 'We The Sheeple']
+];
+
 // ---- Entry points -----------------------------------------------------------
 function doGet(e) { return handle(e && e.parameter ? e.parameter : {}); }
 
@@ -39,12 +51,14 @@ function doPost(e) {
 
 function handle(data) {
   try {
-    if (!data || data.auth !== AUTH_HASH) return json({ ok: false, error: 'unauthorized' });
+    if (!data || !isValidAuth(data.auth)) return json({ ok: false, error: 'unauthorized' });
     var action = data.action;
     var out;
     switch (action) {
+      case 'login':         out = doLogin(data.auth); break;
       case 'getState':      out = getState(data.station); break;
       case 'getStations':   out = { stations: getStations() }; break;
+      case 'createPlaylist':out = createPlaylist(data.station); break;
       case 'search':        out = { results: searchYouTube(data.query) }; break;
       case 'addTrack':      out = addTrack(data); break;
       case 'removeTrack':   out = removeTrack(data.station, data.id, data.by); break;
@@ -82,11 +96,60 @@ function ensureSheet(name, headers) {
   return s;
 }
 
-/** Station tabs = every sheet except Metadata/Presence. */
+/** Station tabs = every sheet except the system tabs. */
 function getStations() {
   return ss().getSheets()
     .map(function (s) { return s.getName(); })
-    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET; });
+    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET; });
+}
+
+/** Create a new empty playlist tab (no-op if it already exists). */
+function createPlaylist(station) {
+  if (!station) return { ok: false, error: 'missing station name' };
+  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET) {
+    return { ok: false, error: 'reserved name' };
+  }
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    if (ss().getSheetByName(station)) return { ok: true, created: false };
+    var s = ss().insertSheet(station);
+    s.appendRow(STATION_HEADERS);
+    return { ok: true, created: true };
+  } finally { lock.releaseLock(); }
+}
+
+// ---- Cohorts / auth ---------------------------------------------------------
+/** Read cohort rows; seed defaults if the tab is empty so the app never bricks. */
+function getCohorts() {
+  var s = ensureSheet(COHORT_SHEET, COHORT_HEADERS);
+  if (s.getLastRow() < 2) {
+    s.getRange(2, 1, COHORT_SEED.length, COHORT_HEADERS.length).setValues(COHORT_SEED);
+  }
+  var last = s.getLastRow();
+  if (last < 2) return [];
+  return s.getRange(2, 1, last - 1, COHORT_HEADERS.length).getValues()
+    .filter(function (r) { return r[1]; })
+    .map(function (r) {
+      return { label: String(r[0]), passwordHash: String(r[1]).trim(), defaultStation: String(r[2]) };
+    });
+}
+
+function cohortForAuth(hash) {
+  if (!hash) return null;
+  var cohorts = getCohorts();
+  for (var i = 0; i < cohorts.length; i++) {
+    if (cohorts[i].passwordHash === hash) return cohorts[i];
+  }
+  return null;
+}
+
+function isValidAuth(hash) { return !!cohortForAuth(hash); }
+
+/** Return the cohort's default landing playlist for a (validated) password hash. */
+function doLogin(hash) {
+  var c = cohortForAuth(hash);
+  if (!c) return { ok: false, error: 'unauthorized' };
+  return { ok: true, defaultStation: c.defaultStation, label: c.label };
 }
 
 function getStationSheet(station) {
