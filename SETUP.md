@@ -50,13 +50,23 @@ The password is **`extricity`** (stored as a salted hash, never plaintext).
 
 ---
 
-## Rotating the password
-The plaintext word lives nowhere. To change it:
+## Cohort passwords (multiple playlists)
+Each password is a **cohort key**: it unlocks the whole app and sets which playlist you *land on*. Any valid password can still listen/add/gong on every playlist via the station switcher — the password is just for onboarding a group to their default station.
+
+Cohorts live in the Sheet's **`Cohorts`** tab (auto-created): `label` · `passwordHash` · `defaultStation`. To add a new friend group:
+1. Create the playlist tab (add a Sheet tab, or use the app once `createPlaylist` is wired to UI).
+2. Compute the hash for the new password (uses the same global salt):
+   ```bash
+   python3 -c "import hashlib; salt='ef6cc100b3416ca73a69323d1e3b3ef1'; print(hashlib.sha256((salt+'NEW-PASSWORD').encode()).hexdigest())"
+   ```
+3. Add a row to `Cohorts`: `Friends Of X` · `<hash>` · `Their Playlist`. No redeploy needed.
+
+## Rotating a password
+The plaintext word lives nowhere. To change a cohort's password, recompute its hash and update that cohort's `passwordHash` cell in the **`Cohorts`** tab (no redeploy):
 ```bash
-python3 -c "import secrets,hashlib; s=secrets.token_hex(16); \
-print('salt',s); print('hash',hashlib.sha256((s+'NEWPASSWORD').encode()).hexdigest())"
+python3 -c "import hashlib; salt='ef6cc100b3416ca73a69323d1e3b3ef1'; print(hashlib.sha256((salt+'NEW-PASSWORD').encode()).hexdigest())"
 ```
-Put the new `salt`/`hash` into **both** `Code.gs` (`AUTH_SALT`/`AUTH_HASH`) and `index.html` (`CONFIG.authSalt`/`authHash`), re-deploy the script, and re-share the file.
+(The global `AUTH_SALT` in `Code.gs` / `CONFIG.authSalt` in `index.html` stays the same for all cohorts.)
 
 ## Honest security note
 The password is obfuscation, not a lock: the hash travels on every request (visible in devtools) and is replayable. Keep nothing sensitive in the station. See §6 of the spec.
