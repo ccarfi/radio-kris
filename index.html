@@ -235,6 +235,7 @@ const CONFIG = {
   // password validation is server-side now: any valid cohort password unlocks the
   // app; the cohort just sets which playlist you land on. Manage cohorts in the
   // Sheet's "Cohorts" tab (label / passwordHash / defaultStation).
+  fallbackStation: 'Eclectic Commons',  // app-wide default channel when no cohort landing applies
   pollMs: 4000,        // how often to fetch shared state
   tickMs: 500,         // local UI / sync tick
   heartbeatMs: 15000,  // presence ping
@@ -337,7 +338,10 @@ async function loadStations(){
   (r.stations||[]).forEach(name=>{
     const o = document.createElement('option'); o.value=name; o.textContent=name; sel.appendChild(o);
   });
-  if (!station || (r.stations||[]).indexOf(station)===-1) station = (r.stations||[])[0] || '';
+  if (!station || (r.stations||[]).indexOf(station)===-1){
+    const all = r.stations || [];
+    station = all.indexOf(CONFIG.fallbackStation)>=0 ? CONFIG.fallbackStation : (all[0] || '');
+  }
   sel.value = station;
   localStorage.setItem('rk_station', station);
   renderStationSub();
