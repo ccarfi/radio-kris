@@ -70,9 +70,8 @@
   .gong:active{border-color:#400 #c25 #c25 #400;}
 
   /* ---- station + presence ---- */
-  .bar{display:flex; gap:6px; align-items:center; padding:6px 8px; font-size:11px;}
+  .bar{display:flex; padding:6px 8px; font-size:11px;}
   .bar select{flex:1;}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--lcd-text);box-shadow:0 0 6px var(--lcd-text);display:inline-block;}
   .listeners{color:var(--muted); font-size:10px; padding:0 8px 6px; word-break:break-word;}
   .station-sub{color:var(--muted); font-size:11px; font-style:italic; padding:3px 8px 0; word-break:break-word;}
   .station-sub:empty{display:none;}
@@ -184,10 +183,10 @@
     </div>
   </div>
 
-  <!-- Station + presence -->
+  <!-- Channel -->
   <div class="module bevel-out">
+    <div class="titlebar"><span>CHANNEL</span></div>
     <div class="bar">
-      <span class="dot"></span>
       <select id="station-sel"></select>
     </div>
     <div class="station-sub" id="station-sub"></div>
