@@ -36,6 +36,16 @@ var STATIONS_META_SEED = [
   ['We The Sheeple', 'Sheep titles, bands, lyrics and all things ovine.']
 ];
 
+// ---- Chat / status feed (surfaced in the in-app chat window) ----------------
+// One shared tab, one row per message/event, kept to the last CHAT_KEEP per
+// station. Status events (gong/add/remove/join) are generated server-side so
+// they can't be spoofed or duplicated across clients.
+var CHAT_SHEET = 'Chat';
+var CHAT_HEADERS = ['station', 'id', 'ts', 'type', 'name', 'text']; // type: chat|gong|add|remove|join
+var CHAT_KEEP = 10;                    // items kept per station (the configurable "10")
+var CHAT_MAX_LEN = 200;                // max chars for a typed chat message
+var JOIN_DEDUPE_MS = 5 * 60 * 1000;    // suppress repeat "joined" within this window
+
 // ---- Cohorts (password -> default landing playlist) -------------------------
 // Any valid cohort hash unlocks the whole app; the hash only picks the landing
 // station. All hashes use the single global AUTH_SALT.
@@ -74,6 +84,7 @@ function handle(data) {
       case 'removeTrack':   out = removeTrack(data.station, data.id, data.by); break;
       case 'playTrack':     out = playTrack(data.station, data.id, data.by); break;
       case 'gong':          out = gong(data.station, data.by); break;
+      case 'postChat':      out = postChat(data.station, data.by, data.text); break;
       case 'advance':       out = advance(data.station, data.expectedTrackId, data.force); break;
       case 'heartbeat':     out = heartbeat(data.station, data.handle); break;
       default:              return json({ ok: false, error: 'unknown action: ' + action });
@@ -110,13 +121,13 @@ function ensureSheet(name, headers) {
 function getStations() {
   return ss().getSheets()
     .map(function (s) { return s.getName(); })
-    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET && n !== STATIONS_META_SHEET; });
+    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET && n !== STATIONS_META_SHEET && n !== CHAT_SHEET; });
 }
 
 /** Create a new empty playlist tab (no-op if it already exists). */
 function createPlaylist(station) {
   if (!station) return { ok: false, error: 'missing station name' };
-  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET || station === STATIONS_META_SHEET) {
+  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET || station === STATIONS_META_SHEET || station === CHAT_SHEET) {
     return { ok: false, error: 'reserved name' };
   }
   var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
@@ -177,6 +188,63 @@ function getStationSubtitles() {
     if (name) map[name] = String(values[i][1] || '');
   }
   return map;
+}
+
+// ---- Chat / status feed -----------------------------------------------------
+function chatSheet() { return ensureSheet(CHAT_SHEET, CHAT_HEADERS); }
+
+/** Append one chat/status row, then trim this station's feed to CHAT_KEEP. */
+function appendChat(station, type, name, text) {
+  if (!station) return;
+  var s = chatSheet();
+  s.appendRow([station, Utilities.getUuid(), Date.now(), type, name || '', String(text == null ? '' : text)]);
+  trimChat(s, station);
+}
+
+/** Delete the oldest overflow rows for a station so it keeps at most CHAT_KEEP. */
+function trimChat(s, station) {
+  var last = s.getLastRow();
+  if (last < 2) return;
+  var values = s.getRange(2, 1, last - 1, CHAT_HEADERS.length).getValues();
+  var rows = []; // sheet row numbers for this station, oldest first (append order)
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]) === station) rows.push(i + 2);
+  }
+  var overflow = rows.length - CHAT_KEEP;
+  if (overflow > 0) {
+    rows.slice(0, overflow).sort(function (a, b) { return b - a; })
+        .forEach(function (r) { try { s.deleteRow(r); } catch (e) {} });
+  }
+}
+
+/** Last CHAT_KEEP items for a station, oldest → newest. */
+function readChat(station) {
+  var s = chatSheet();
+  var last = s.getLastRow();
+  if (last < 2) return [];
+  var values = s.getRange(2, 1, last - 1, CHAT_HEADERS.length).getValues();
+  var out = [];
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]) !== station) continue;
+    out.push({
+      id: String(values[i][1]), ts: Number(values[i][2]) || 0,
+      type: String(values[i][3]), name: String(values[i][4]), text: String(values[i][5])
+    });
+  }
+  out.sort(function (a, b) { return a.ts - b.ts; });
+  return out.slice(-CHAT_KEEP);
+}
+
+/** Post a user-typed chat message (trimmed + length-capped). */
+function postChat(station, by, text) {
+  var msg = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  if (!msg) return { ok: false, error: 'empty message' };
+  if (msg.length > CHAT_MAX_LEN) msg = msg.slice(0, CHAT_MAX_LEN);
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    appendChat(station, 'chat', by || '', msg);
+    return { ok: true };
+  } finally { lock.releaseLock(); }
 }
 
 function getStationSheet(station) {
@@ -296,7 +364,8 @@ function getState(station) {
     queue: queue.map(function (t) {
       return { id: t.id, videoId: t.videoId, title: t.title, artist: t.artist,
                durationSec: t.durationSec, thumbnailUrl: t.thumbnailUrl, addedBy: t.addedBy, addedAt: t.addedAt };
-    })
+    }),
+    chat: readChat(station)
   };
 }
 
@@ -312,6 +381,7 @@ function addTrack(d) {
     if (!meta.currentTrackId || indexOfId(queue, meta.currentTrackId) === -1) {
       meta.currentTrackId = id; meta.trackStartedAt = Date.now(); writeMeta(meta);
     }
+    appendChat(d.station, 'add', d.by || d.addedBy || '', d.title || '');
     return { id: id };
   } finally { lock.releaseLock(); }
 }
@@ -324,6 +394,7 @@ function removeTrack(station, id, by) {
     rollForward(meta, queue);
     var idx = indexOfId(queue, id);
     if (idx === -1) return { ok: true, removed: false };
+    var removedTitle = queue[idx].title;
 
     // if removing the currently-playing track, advance first (gong-and-delete)
     if (meta.currentTrackId === id) {
@@ -337,6 +408,7 @@ function removeTrack(station, id, by) {
       writeMeta(meta);
     }
     getStationSheet(station).deleteRow(queue[idx].row);
+    appendChat(station, 'remove', by || '', removedTitle);
     return { ok: true, removed: true };
   } finally { lock.releaseLock(); }
 }
@@ -366,12 +438,14 @@ function gong(station, by) {
     rollForward(meta, queue);
     if (!queue.length) return { ok: false, error: 'empty station' };
     var idx = indexOfId(queue, meta.currentTrackId);
+    var gongedTitle = idx === -1 ? '' : queue[idx].title;
     var nextIdx = idx === -1 ? 0 : (idx + 1) % queue.length;
     meta.currentTrackId = queue[nextIdx].id;
     meta.trackStartedAt = now;
     meta.lastGongBy = by || '';
     meta.lastGongAt = now;
     writeMeta(meta);
+    appendChat(station, 'gong', meta.lastGongBy, gongedTitle);
     return { ok: true, gongedBy: meta.lastGongBy };
   } finally { lock.releaseLock(); }
 }
@@ -402,11 +476,12 @@ function heartbeat(station, handle) {
   var last = s.getLastRow();
   var values = last >= 2 ? s.getRange(2, 1, last - 1, PRESENCE_HEADERS.length).getValues() : [];
   var found = -1;
+  var prevSeen = -1;   // this handle's previous lastSeenAt on this station (-1 = no row)
   var listeners = {};
   var staleRows = [];
   for (var i = 0; i < values.length; i++) {
     var st = String(values[i][0]), hd = String(values[i][1]), seen = Number(values[i][2]) || 0;
-    if (st === station && hd === handle) found = i + 2;
+    if (st === station && hd === handle) { found = i + 2; prevSeen = seen; }
     if (now - seen > PRESENCE_TTL_MS * 4) { staleRows.push(i + 2); continue; }
     if (st === station && (now - seen < PRESENCE_TTL_MS || (st === station && hd === handle))) {
       listeners[hd] = true;
@@ -420,6 +495,10 @@ function heartbeat(station, handle) {
   listeners[handle] = true;
   // prune very old rows (delete bottom-up)
   staleRows.sort(function (a, b) { return b - a; }).forEach(function (r) { try { s.deleteRow(r); } catch (e) {} });
+  // surface a "joined" only when this handle is new or has been gone a while
+  if (handle && (prevSeen < 0 || now - prevSeen > JOIN_DEDUPE_MS)) {
+    appendChat(station, 'join', handle, '');
+  }
   var names = Object.keys(listeners);
   return { listeners: names, count: names.length };
 }
