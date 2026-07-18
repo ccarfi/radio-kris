@@ -92,6 +92,12 @@
   .chat-input{display:flex; gap:6px; padding:6px 8px;}
   .chat-input input{flex:1; min-width:0;}
   .chat-input button{flex:none; min-width:52px;}
+  /* in-flight indicator: hide the SEND label, spin a ring in its place */
+  .chat-input button.sending{color:transparent; position:relative;}
+  .chat-input button.sending::after{content:''; position:absolute; top:50%; left:50%;
+    width:12px; height:12px; margin:-7px 0 0 -6px; border:2px solid var(--muted);
+    border-top-color:var(--lcd-text); border-radius:50%; animation:btnspin .6s linear infinite;}
+  @keyframes btnspin{to{transform:rotate(360deg);}}
 
   /* ---- queue ---- */
   #queue{max-height:300px; overflow-y:auto;}
@@ -241,6 +247,7 @@ let HANDLE = localStorage.getItem('rk_handle') || '';
 let station = localStorage.getItem('rk_station') || '';
 let STATION_SUBS = {};   // { stationName: subtitle } from getStations
 let chatCollapsed = localStorage.getItem('rk_chat_open') !== '1';  // default collapsed
+let chatSending = false;   // guards against double-send while a message is in flight
 let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
@@ -391,12 +398,20 @@ function toggleChat(){
 }
 
 async function sendChat(){
+  if (chatSending) return;                       // ignore repeat Enter/clicks mid-flight
   const inp = $('chat-in');
   const text = (inp.value||'').trim();
   if (!text || !station) return;
   inp.value = '';
-  try{ await api('postChat', { station, by: HANDLE, text }); }catch(e){ /* transient */ }
-  pollState();   // pull the updated feed promptly instead of waiting for the next 4s tick
+  chatSending = true;
+  const btn = $('chat-send'); btn.disabled = true; btn.classList.add('sending');
+  try{
+    await api('postChat', { station, by: HANDLE, text });
+    await pollState();   // keep the spinner up until the message is actually in the feed
+  }catch(e){ /* transient */ }
+  finally{
+    chatSending = false; btn.disabled = false; btn.classList.remove('sending');
+  }
 }
 
 /* ============================ STATE SYNC ============================ */
