@@ -345,7 +345,7 @@ function renderStationSub(){
 /* ---- chat / status window ---- */
 function chatLineText(m){
   switch(m.type){
-    case 'gong':   return [m.name, ' gonged ', m.text || 'a track'];
+    case 'gong':   return [m.name, ' gonged ' + (m.text || 'a track')];
     case 'add':    return [m.name, ' added ' + (m.text||'a track') + ' to the queue'];
     case 'remove': return [m.name, ' deleted ' + (m.text||'a track') + ' from the queue'];
     case 'join':   return [m.name, ' has joined'];
