@@ -106,6 +106,19 @@
     width:12px; height:12px; margin:-7px 0 0 -6px; border:2px solid var(--muted);
     border-top-color:var(--lcd-text); border-radius:50%; animation:btnspin .6s linear infinite;}
   @keyframes btnspin{to{transform:rotate(360deg);}}
+  /* in-flight indicators for add/remove (reuse btnspin) */
+  .track.removing{opacity:.5;}
+  .track .x.spin{color:transparent; pointer-events:none; position:relative;}
+  .track .x.spin::after{content:''; position:absolute; top:50%; left:50%;
+    width:11px; height:11px; margin:-6px 0 0 -6px; border:2px solid var(--muted);
+    border-top-color:var(--lcd-text); border-radius:50%; animation:btnspin .6s linear infinite;}
+  #search-results.locked{pointer-events:none;}
+  #search-results.locked .result:not(.adding){opacity:.4;}
+  .result.adding{position:relative;}
+  .result.adding .dur{visibility:hidden;}
+  .result.adding::after{content:''; position:absolute; right:14px; top:50%;
+    width:13px; height:13px; margin-top:-7px; border:2px solid var(--muted);
+    border-top-color:var(--lcd-text); border-radius:50%; animation:btnspin .6s linear infinite;}
 
   /* ---- queue ---- */
   #queue{max-height:300px; overflow-y:auto;}
@@ -260,6 +273,8 @@ let station = localStorage.getItem('rk_station') || '';
 let STATION_SUBS = {};   // { stationName: subtitle } from getStations
 let chatCollapsed = localStorage.getItem('rk_chat_open') !== '1';  // default collapsed
 let chatSending = false;   // guards against double-send while a message is in flight
+let pendingRemoves = new Set();  // track ids being removed (spinner + lock, survives re-renders)
+let adding = false;        // guards against double-add while a track is in flight
 let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
@@ -684,8 +699,9 @@ function renderQueue(){
   const box = $('queue'); box.innerHTML='';
   q.forEach((t)=>{
     const now = t.id === state.currentTrackId;
+    const removing = pendingRemoves.has(t.id);
     const row = document.createElement('div');
-    row.className = 'track' + (now?' now':'');
+    row.className = 'track' + (now?' now':'') + (removing?' removing':'');
     row.innerHTML =
       (now ? '<span class="nowtag">▶</span>' : '<span class="nowtag" style="visibility:hidden">▶</span>') +
       '<img src="'+ (t.thumbnailUrl||'') +'" alt="">' +
@@ -693,8 +709,8 @@ function renderQueue(){
       '<div class="a">'+ esc(t.artist) +'</div>' +
       '<div class="by">+ '+ esc(t.addedBy||'?') +'</div></div>' +
       '<span class="dur">'+ fmt(t.durationSec) +'</span>' +
-      '<button class="x" title="remove">✕</button>';
-    row.querySelector('.info').onclick = ()=> playTrack(t);
+      '<button class="x'+(removing?' spin':'')+'" title="remove"'+(removing?' disabled':'')+'>✕</button>';
+    if (!removing) row.querySelector('.info').onclick = ()=> playTrack(t);
     row.querySelector('.x').onclick = (e)=>{ e.stopPropagation(); removeTrack(t); };
     box.appendChild(row);
   });
@@ -706,18 +722,25 @@ async function playTrack(t){
   pollState();
 }
 async function removeTrack(t){
+  if (pendingRemoves.has(t.id)) return;                 // already in flight — ignore double-tap
   if (!confirm('Remove "'+t.title+'" from the queue?')) return;
-  await api('removeTrack', { station, id:t.id, by:HANDLE });
-  pollState();
+  pendingRemoves.add(t.id);
+  renderQueue();                                        // spinner + lock on this row immediately
+  let ok = false;
+  try{ const r = await api('removeTrack', { station, id:t.id, by:HANDLE }); ok = r && r.ok !== false; }
+  catch(e){ ok = false; }
+  if (!ok) pendingRemoves.delete(t.id);                 // failed → restore the [x]
+  await pollState();                                    // success → row drops; failure → row returns
+  pendingRemoves.delete(t.id);
 }
 
 /* ============================ SEARCH / ADD ============================ */
 function openSearch(){ $('search-modal').classList.remove('hidden'); $('search-in').focus(); }
-function closeSearch(){ $('search-modal').classList.add('hidden'); $('search-results').innerHTML=''; $('search-in').value=''; }
+function closeSearch(){ $('search-modal').classList.add('hidden'); const b=$('search-results'); b.classList.remove('locked'); b.innerHTML=''; $('search-in').value=''; }
 
 async function runSearch(){
   const q = $('search-in').value.trim(); if (!q) return;
-  const box = $('search-results'); box.innerHTML = '<div class="pad tiny">searching…</div>';
+  const box = $('search-results'); box.classList.remove('locked'); box.innerHTML = '<div class="pad tiny">searching…</div>';
   try{
     const r = await api('search', { query:q });
     if (!r.ok){ box.innerHTML = '<div class="pad err">'+ esc(r.error||'search failed') +'</div>'; return; }
@@ -729,19 +752,30 @@ async function runSearch(){
         '<div class="info" style="flex:1;min-width:0;"><div class="t" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(res.title)+'</div>'+
         '<div class="a">'+esc(res.artist)+'</div></div>'+
         '<span class="dur">'+fmt(res.durationSec)+'</span>';
-      d.onclick = ()=> addTrack(res);
+      d.onclick = ()=> addTrack(res, d);
       box.appendChild(d);
     });
   }catch(e){ box.innerHTML = '<div class="pad err">'+esc(String(e.message||e))+'</div>'; }
 }
 
-async function addTrack(res){
-  await api('addTrack', {
-    station, videoId:res.videoId, title:res.title, artist:res.artist,
-    durationSec:res.durationSec, thumbnailUrl:res.thumbnailUrl, by:HANDLE
-  });
-  closeSearch();
-  pollState();
+async function addTrack(res, el){
+  if (adding) return;                          // one add at a time — ignore double-tap
+  adding = true;
+  const box = $('search-results');
+  box.classList.add('locked');                 // lock all results
+  if (el) el.classList.add('adding');          // spinner on the tapped result
+  try{
+    await api('addTrack', {
+      station, videoId:res.videoId, title:res.title, artist:res.artist,
+      durationSec:res.durationSec, thumbnailUrl:res.thumbnailUrl, by:HANDLE
+    });
+    closeSearch();
+    pollState();
+  }catch(e){
+    box.classList.remove('locked');
+    if (el) el.classList.remove('adding');
+    box.insertAdjacentHTML('afterbegin', '<div class="pad err">couldn\'t add — try again</div>');
+  }finally{ adding = false; }
 }
 
 /* ============================ VISUALIZER ============================ */
