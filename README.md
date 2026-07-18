@@ -11,8 +11,7 @@ Everyone tuned in hears (approximately) the same track at the same spot at the s
 
 Radio KRIS is a single standalone `index.html` that anyone can open in a browser (desktop or mobile). It plays an always-on station: when you open the app and tune in, you join wherever the broadcast currently is. There's no server to run — a Google Apps Script web app bound to a Google Sheet acts as the tiny backend, and GitHub Pages hosts the front-end.
 
-<img width="422" height="773" alt="Screenshot 2026-07-18 at 11 26 11 AM" src="https://github.com/user-attachments/assets/7c893607-39cf-4b32-a271-9e396425816d" />
-
+<img width="418" height="772" alt="Screenshot 2026-07-18 at 11 30 07 AM" src="https://github.com/user-attachments/assets/7d9ce7db-3df4-4cbf-9a15-b8b89ade8a88" />
 
 ## Features
 
