@@ -26,6 +26,16 @@ var STATION_HEADERS = ['id', 'videoId', 'title', 'artist', 'durationSec', 'thumb
 var META_HEADERS = ['station', 'currentTrackId', 'trackStartedAt', 'lastGongBy', 'lastGongAt', 'lastActionAt'];
 var PRESENCE_HEADERS = ['station', 'handle', 'lastSeenAt'];
 
+// ---- Station subtitles (short microcopy shown in the station chooser) --------
+// One row per station. Purely cosmetic; missing rows just render no subtitle.
+var STATIONS_META_SHEET = 'Stations';
+var STATIONS_META_HEADERS = ['station', 'subtitle'];
+// Seeded into the Stations tab if it's empty, so new deployments show copy.
+var STATIONS_META_SEED = [
+  ['Extricity Classics', 'Things that were in the A-rotation on Twin Dolphin.'],
+  ['We The Sheeple', 'Sheep titles, bands, lyrics and all things ovine.']
+];
+
 // ---- Cohorts (password -> default landing playlist) -------------------------
 // Any valid cohort hash unlocks the whole app; the hash only picks the landing
 // station. All hashes use the single global AUTH_SALT.
@@ -57,7 +67,7 @@ function handle(data) {
     switch (action) {
       case 'login':         out = doLogin(data.auth); break;
       case 'getState':      out = getState(data.station); break;
-      case 'getStations':   out = { stations: getStations() }; break;
+      case 'getStations':   out = { stations: getStations(), subtitles: getStationSubtitles() }; break;
       case 'createPlaylist':out = createPlaylist(data.station); break;
       case 'search':        out = { results: searchYouTube(data.query) }; break;
       case 'addTrack':      out = addTrack(data); break;
@@ -100,13 +110,13 @@ function ensureSheet(name, headers) {
 function getStations() {
   return ss().getSheets()
     .map(function (s) { return s.getName(); })
-    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET; });
+    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET && n !== STATIONS_META_SHEET; });
 }
 
 /** Create a new empty playlist tab (no-op if it already exists). */
 function createPlaylist(station) {
   if (!station) return { ok: false, error: 'missing station name' };
-  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET) {
+  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET || station === STATIONS_META_SHEET) {
     return { ok: false, error: 'reserved name' };
   }
   var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
@@ -150,6 +160,23 @@ function doLogin(hash) {
   var c = cohortForAuth(hash);
   if (!c) return { ok: false, error: 'unauthorized' };
   return { ok: true, defaultStation: c.defaultStation, label: c.label };
+}
+
+/** Read per-station subtitles into a { station: subtitle } map. Seeds defaults if the tab is empty. */
+function getStationSubtitles() {
+  var s = ensureSheet(STATIONS_META_SHEET, STATIONS_META_HEADERS);
+  if (s.getLastRow() < 2) {
+    s.getRange(2, 1, STATIONS_META_SEED.length, STATIONS_META_HEADERS.length).setValues(STATIONS_META_SEED);
+  }
+  var last = s.getLastRow();
+  if (last < 2) return {};
+  var values = s.getRange(2, 1, last - 1, STATIONS_META_HEADERS.length).getValues();
+  var map = {};
+  for (var i = 0; i < values.length; i++) {
+    var name = String(values[i][0]).trim();
+    if (name) map[name] = String(values[i][1] || '');
+  }
+  return map;
 }
 
 function getStationSheet(station) {
