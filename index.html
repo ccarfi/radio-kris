@@ -75,6 +75,13 @@
   .listeners{color:var(--muted); font-size:10px; padding:0 8px 6px; word-break:break-word;}
   .station-sub{color:var(--muted); font-size:11px; font-style:italic; padding:3px 8px 0; word-break:break-word;}
   .station-sub:empty{display:none;}
+  /* channel switcher affordance (iOS selects render no native arrow) */
+  .chan-hint{font-weight:normal; font-size:10px; color:#d7d7ee; letter-spacing:0;}
+  .chan-select{position:relative; flex:1;}
+  #station-sel{width:100%; -webkit-appearance:none; -moz-appearance:none; appearance:none; padding-right:40px;}
+  .chan-caret{position:absolute; top:0; right:0; bottom:0; display:flex; align-items:center;
+    padding:0 12px; color:var(--accent); background:var(--panel);
+    border-left:2px solid var(--bevel-dark); pointer-events:none; font-size:14px;}
 
   /* ---- chat / status ---- */
   .chat-titlebar{cursor:pointer;}
@@ -185,9 +192,12 @@
 
   <!-- Channel -->
   <div class="module bevel-out">
-    <div class="titlebar"><span>CHANNEL</span></div>
+    <div class="titlebar"><span>CHANNEL</span><span class="chan-hint">tap to change &#9662;</span></div>
     <div class="bar">
-      <select id="station-sel"></select>
+      <div class="chan-select">
+        <select id="station-sel"></select>
+        <span class="chan-caret" aria-hidden="true">&#9660;</span>
+      </div>
     </div>
     <div class="station-sub" id="station-sub"></div>
     <div class="listeners"><span id="presence">— tuning in</span></div>
