@@ -3,7 +3,7 @@
 **A browser-based, shared, near-synchronous radio station with a Winamp-inspired UI.**
 Everyone tuned in hears (approximately) the same track at the same spot at the same time — like a real radio broadcast. Tracks come from YouTube, and all the shared state lives in a Google Sheet.
 
-🎧 **Live:** [radiokris.org](https://radiokris.org)
+🎧 **Listen Live:** [radiokris.org](https://radiokris.org)
 
 ---
 
