@@ -47,6 +47,10 @@ var CHAT_KEEP = 10;                    // items kept per station (the configurab
 var CHAT_MAX_LEN = 200;                // max chars for a typed chat message
 var JOIN_DEDUPE_MS = 5 * 60 * 1000;    // suppress repeat "joined" within this window
 
+// ---- Votes (per-track up/down; one vote per device per track per station) ----
+var VOTES_SHEET = 'Votes';
+var VOTES_HEADERS = ['station', 'trackId', 'voterId', 'value', 'ts']; // value: 1 | -1
+
 // ---- Cohorts (password -> default landing playlist) -------------------------
 // Any valid cohort hash unlocks the whole app; the hash only picks the landing
 // station. All hashes use the single global AUTH_SALT.
@@ -79,7 +83,8 @@ function handle(data) {
     var out;
     switch (action) {
       case 'login':         out = doLogin(data.auth); break;
-      case 'getState':      out = getState(data.station); break;
+      case 'getState':      out = getState(data.station, data.voterId); break;
+      case 'vote':          out = vote(data.station, data.trackId, data.voterId, data.value); break;
       case 'getStations':   out = { stations: getStations(), subtitles: getStationSubtitles() }; break;
       case 'createPlaylist':out = createPlaylist(data.station); break;
       case 'setSubtitle':   out = setSubtitle(data.station, data.subtitle); break;
@@ -126,13 +131,13 @@ function ensureSheet(name, headers) {
 function getStations() {
   return ss().getSheets()
     .map(function (s) { return s.getName(); })
-    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET && n !== STATIONS_META_SHEET && n !== CHAT_SHEET; });
+    .filter(function (n) { return n !== META_SHEET && n !== PRESENCE_SHEET && n !== COHORT_SHEET && n !== STATIONS_META_SHEET && n !== CHAT_SHEET && n !== VOTES_SHEET; });
 }
 
 /** Create a new empty playlist tab (no-op if it already exists). */
 function createPlaylist(station) {
   if (!station) return { ok: false, error: 'missing station name' };
-  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET || station === STATIONS_META_SHEET || station === CHAT_SHEET) {
+  if (station === META_SHEET || station === PRESENCE_SHEET || station === COHORT_SHEET || station === STATIONS_META_SHEET || station === CHAT_SHEET || station === VOTES_SHEET) {
     return { ok: false, error: 'reserved name' };
   }
   var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
@@ -402,10 +407,11 @@ function rollForward(meta, queue) {
 }
 
 // ---- Actions ----------------------------------------------------------------
-function getState(station) {
+function getState(station, voterId) {
   var queue = readQueue(station);
   var meta = getMeta(station);
   rollForward(meta, queue);
+  var v = getStationVotes(station, voterId);
   return {
     station: station,
     currentTrackId: meta.currentTrackId,
@@ -417,8 +423,72 @@ function getState(station) {
       return { id: t.id, videoId: t.videoId, title: t.title, artist: t.artist,
                durationSec: t.durationSec, thumbnailUrl: t.thumbnailUrl, addedBy: t.addedBy, addedAt: t.addedAt };
     }),
-    chat: readChat(station)
+    chat: readChat(station),
+    votes: v.net,      // { trackId: netCount }
+    myVotes: v.mine    // { trackId: +1|-1 } for this voterId
   };
+}
+
+// ---- Votes ------------------------------------------------------------------
+function votesSheet() { return ensureSheet(VOTES_SHEET, VOTES_HEADERS); }
+
+/** Net vote per track for a station, plus the given voter's own votes. */
+function getStationVotes(station, voterId) {
+  var s = votesSheet();
+  var last = s.getLastRow();
+  var net = {}, mine = {};
+  if (last < 2) return { net: net, mine: mine };
+  var vals = s.getRange(2, 1, last - 1, VOTES_HEADERS.length).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]) !== station) continue;
+    var tid = String(vals[i][1]);
+    net[tid] = (net[tid] || 0) + (Number(vals[i][3]) || 0);
+    if (voterId && String(vals[i][2]) === voterId) mine[tid] = Number(vals[i][3]) || 0;
+  }
+  return { net: net, mine: mine };
+}
+
+/** Set a voter's vote on a track to 1, -1, or 0 (clear). Upsert by (station,trackId,voterId). */
+function vote(station, trackId, voterId, value) {
+  if (!station || !trackId || !voterId) return { ok: false, error: 'missing params' };
+  value = Number(value) || 0;
+  value = value > 0 ? 1 : (value < 0 ? -1 : 0);
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    var s = votesSheet();
+    var last = s.getLastRow();
+    var foundRow = -1;
+    if (last >= 2) {
+      var vals = s.getRange(2, 1, last - 1, VOTES_HEADERS.length).getValues();
+      for (var i = 0; i < vals.length; i++) {
+        if (String(vals[i][0]) === station && String(vals[i][1]) === trackId && String(vals[i][2]) === voterId) {
+          foundRow = i + 2; break;
+        }
+      }
+    }
+    if (value === 0) {
+      if (foundRow > 0) s.deleteRow(foundRow);
+    } else if (foundRow > 0) {
+      s.getRange(foundRow, 1, 1, VOTES_HEADERS.length).setValues([[station, trackId, voterId, value, Date.now()]]);
+    } else {
+      s.appendRow([station, trackId, voterId, value, Date.now()]);
+    }
+    var agg = getStationVotes(station, voterId);
+    return { ok: true, trackId: trackId, net: agg.net[trackId] || 0, myValue: agg.mine[trackId] || 0 };
+  } finally { lock.releaseLock(); }
+}
+
+/** Remove all vote rows for a track (called when the track is deleted). */
+function deleteVotesForTrack(station, trackId) {
+  var s = votesSheet();
+  var last = s.getLastRow();
+  if (last < 2) return;
+  var vals = s.getRange(2, 1, last - 1, VOTES_HEADERS.length).getValues();
+  var rows = [];
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]) === station && String(vals[i][1]) === trackId) rows.push(i + 2);
+  }
+  rows.sort(function (a, b) { return b - a; }).forEach(function (r) { try { s.deleteRow(r); } catch (e) {} });
 }
 
 function addTrack(d) {
@@ -460,6 +530,7 @@ function removeTrack(station, id, by) {
       writeMeta(meta);
     }
     getStationSheet(station).deleteRow(queue[idx].row);
+    deleteVotesForTrack(station, id);
     appendChat(station, 'remove', by || '', removedTitle);
     return { ok: true, removed: true };
   } finally { lock.releaseLock(); }
