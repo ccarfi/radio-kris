@@ -132,6 +132,16 @@
   .track .dur{font-size:10px; color:var(--muted); flex:none;}
   .track .x{flex:none; padding:2px 7px; color:var(--red);}
   .nowtag{color:var(--accent); font-size:10px; font-weight:bold; flex:none;}
+  /* left-side Reddit-style vote pill (kept away from the [x] on the right) */
+  .vote{display:flex; flex-direction:column; align-items:center; flex:none; width:30px; user-select:none;}
+  .vote button{background:none; border:0; margin:0; padding:3px 7px; font-size:13px; line-height:1;
+    color:var(--muted); cursor:pointer; font-family:var(--font);}
+  .vote button:active{transform:scale(.85);}
+  .vote .vup.on{color:var(--lcd-text);}
+  .vote .vdn.on{color:var(--red);}
+  .vnet{font-size:11px; color:var(--muted); padding:1px 0; min-width:16px; text-align:center;}
+  .vnet.pos{color:var(--lcd-text);}
+  .vnet.neg{color:var(--red);}
 
   /* ---- search modal ---- */
   .overlay{position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:12px; z-index:50;}
@@ -275,6 +285,11 @@ let chatCollapsed = localStorage.getItem('rk_chat_open') !== '1';  // default co
 let chatSending = false;   // guards against double-send while a message is in flight
 let pendingRemoves = new Set();  // track ids being removed (spinner + lock, survives re-renders)
 let adding = false;        // guards against double-add while a track is in flight
+let VOTER = localStorage.getItem('rk_voter') || '';   // per-device vote identity (one vote/device/track)
+if (!VOTER){ VOTER = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('v'+Date.now()+Math.random().toString(36).slice(2)); localStorage.setItem('rk_voter', VOTER); }
+let VOTES = {};            // { trackId: netCount } from server
+let MY_VOTES = {};         // { trackId: +1|-1 } this device's votes
+let pendingVotes = {};     // { trackId: value } optimistic, until the vote call resolves
 let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
@@ -448,7 +463,7 @@ async function sendChat(){
 async function pollState(){
   if (!station) return;
   try{
-    const s = await api('getState', { station });
+    const s = await api('getState', { station, voterId: VOTER });
     if (!s.ok){ return; }
     applyState(s);
   }catch(e){ /* transient */ }
@@ -470,6 +485,14 @@ function computedPos(){
 function applyState(s){
   const prevTrackId = state ? state.currentTrackId : null;
   state = s;
+  // votes: take server truth, then overlay any in-flight optimistic votes so they don't flicker
+  VOTES = Object.assign({}, s.votes || {});
+  const serverMy = s.myVotes || {};
+  MY_VOTES = Object.assign({}, serverMy);
+  for (const id in pendingVotes){
+    VOTES[id] = (VOTES[id] || 0) + (pendingVotes[id] - (serverMy[id] || 0));
+    MY_VOTES[id] = pendingVotes[id];
+  }
   renderQueue();
   updateNowPlaying();
   renderChat(s.chat || []);
@@ -700,9 +723,17 @@ function renderQueue(){
   q.forEach((t)=>{
     const now = t.id === state.currentTrackId;
     const removing = pendingRemoves.has(t.id);
+    const net = VOTES[t.id] || 0;
+    const mine = MY_VOTES[t.id] || 0;
+    const netCls = net>0 ? ' pos' : (net<0 ? ' neg' : '');
     const row = document.createElement('div');
     row.className = 'track' + (now?' now':'') + (removing?' removing':'');
     row.innerHTML =
+      '<div class="vote">' +
+        '<button class="vup'+(mine>0?' on':'')+'" aria-label="upvote">▲</button>' +
+        '<span class="vnet'+netCls+'">'+ net +'</span>' +
+        '<button class="vdn'+(mine<0?' on':'')+'" aria-label="downvote">▼</button>' +
+      '</div>' +
       (now ? '<span class="nowtag">▶</span>' : '<span class="nowtag" style="visibility:hidden">▶</span>') +
       '<img src="'+ (t.thumbnailUrl||'') +'" alt="">' +
       '<div class="info"><div class="t">'+ esc(t.title) +'</div>' +
@@ -711,9 +742,26 @@ function renderQueue(){
       '<span class="dur">'+ fmt(t.durationSec) +'</span>' +
       '<button class="x'+(removing?' spin':'')+'" title="remove"'+(removing?' disabled':'')+'>✕</button>';
     if (!removing) row.querySelector('.info').onclick = ()=> playTrack(t);
+    row.querySelector('.vup').onclick = (e)=>{ e.stopPropagation(); vote(t, 1); };
+    row.querySelector('.vdn').onclick = (e)=>{ e.stopPropagation(); vote(t, -1); };
     row.querySelector('.x').onclick = (e)=>{ e.stopPropagation(); removeTrack(t); };
     box.appendChild(row);
   });
+}
+
+// up/down vote a track (toggles off if you tap the same arrow again). Optimistic + reconciled by poll.
+async function vote(t, dir){
+  const cur = (t.id in pendingVotes) ? pendingVotes[t.id] : (MY_VOTES[t.id] || 0);
+  const nv = (cur === dir) ? 0 : dir;
+  pendingVotes[t.id] = nv;
+  VOTES[t.id] = (VOTES[t.id] || 0) + (nv - cur);   // optimistic net
+  MY_VOTES[t.id] = nv;
+  renderQueue();
+  try{
+    const r = await api('vote', { station, trackId:t.id, voterId:VOTER, value:nv });
+    if (r && typeof r.net === 'number'){ VOTES[t.id] = r.net; MY_VOTES[t.id] = r.myValue || 0; }
+  }catch(e){ /* next poll reconciles */ }
+  finally{ delete pendingVotes[t.id]; renderQueue(); }
 }
 
 async function playTrack(t){
