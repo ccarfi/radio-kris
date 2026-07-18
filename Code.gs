@@ -33,7 +33,8 @@ var STATIONS_META_HEADERS = ['station', 'subtitle'];
 // Seeded into the Stations tab if it's empty, so new deployments show copy.
 var STATIONS_META_SEED = [
   ['Extricity Classics', 'Things that were in the A-rotation on Twin Dolphin.'],
-  ['We The Sheeple', 'Sheep titles, bands, lyrics and all things ovine.']
+  ['We The Sheeple', 'Sheep titles, bands, lyrics and all things ovine.'],
+  ['Eclectic Commons', 'Random mix. Anything goes. Add away...']
 ];
 
 // ---- Chat / status feed (surfaced in the in-app chat window) ----------------
@@ -52,10 +53,12 @@ var JOIN_DEDUPE_MS = 5 * 60 * 1000;    // suppress repeat "joined" within this w
 var COHORT_SHEET = 'Cohorts';
 var COHORT_HEADERS = ['label', 'passwordHash', 'defaultStation'];
 var SHEEPLE_HASH = '64f7004c837f7232900520bad14446f00dfe2874e90fc4e4929504da9536e555'; // SHA-256(salt + "baa-ram-ewe")
+var OURMIX_HASH = '9887a527be00977e3c46b080e7c5a3e375d735044836878ce9946d034db66832';  // SHA-256(salt + "ourmix")
 // Seeded into the Cohorts tab if it's empty, so the app can never brick itself.
 var COHORT_SEED = [
   ['Extricity', AUTH_HASH, 'Extricity Classics'],
-  ['We The Sheeple', SHEEPLE_HASH, 'We The Sheeple']
+  ['We The Sheeple', SHEEPLE_HASH, 'We The Sheeple'],
+  ['Eclectic Commons', OURMIX_HASH, 'Eclectic Commons']
 ];
 
 // ---- Entry points -----------------------------------------------------------
@@ -79,6 +82,8 @@ function handle(data) {
       case 'getState':      out = getState(data.station); break;
       case 'getStations':   out = { stations: getStations(), subtitles: getStationSubtitles() }; break;
       case 'createPlaylist':out = createPlaylist(data.station); break;
+      case 'setSubtitle':   out = setSubtitle(data.station, data.subtitle); break;
+      case 'setCohort':     out = setCohort(data.label, data.passwordHash, data.defaultStation); break;
       case 'search':        out = { results: searchYouTube(data.query) }; break;
       case 'addTrack':      out = addTrack(data); break;
       case 'removeTrack':   out = removeTrack(data.station, data.id, data.by); break;
@@ -188,6 +193,53 @@ function getStationSubtitles() {
     if (name) map[name] = String(values[i][1] || '');
   }
   return map;
+}
+
+/** Upsert a station's subtitle (keyed by station name). */
+function setSubtitle(station, subtitle) {
+  if (!station) return { ok: false, error: 'missing station' };
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    var s = ensureSheet(STATIONS_META_SHEET, STATIONS_META_HEADERS);
+    getStationSubtitles(); // ensure seeded before we upsert
+    var last = s.getLastRow();
+    var name = String(station).trim();
+    if (last >= 2) {
+      var vals = s.getRange(2, 1, last - 1, STATIONS_META_HEADERS.length).getValues();
+      for (var i = 0; i < vals.length; i++) {
+        if (String(vals[i][0]).trim() === name) {
+          s.getRange(i + 2, 2).setValue(String(subtitle || ''));
+          return { ok: true, updated: true };
+        }
+      }
+    }
+    s.appendRow([name, String(subtitle || '')]);
+    return { ok: true, created: true };
+  } finally { lock.releaseLock(); }
+}
+
+/** Upsert a cohort row (keyed by passwordHash). Any valid caller can manage cohorts. */
+function setCohort(label, passwordHash, defaultStation) {
+  var hash = String(passwordHash || '').trim();
+  if (!hash || !defaultStation) return { ok: false, error: 'missing passwordHash or defaultStation' };
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    var s = ensureSheet(COHORT_SHEET, COHORT_HEADERS);
+    getCohorts(); // ensure seeded before we upsert
+    var last = s.getLastRow();
+    if (last >= 2) {
+      var vals = s.getRange(2, 1, last - 1, COHORT_HEADERS.length).getValues();
+      for (var i = 0; i < vals.length; i++) {
+        if (String(vals[i][1]).trim() === hash) {
+          s.getRange(i + 2, 1, 1, COHORT_HEADERS.length)
+           .setValues([[label || String(vals[i][0]), hash, defaultStation]]);
+          return { ok: true, updated: true };
+        }
+      }
+    }
+    s.appendRow([label || '', hash, defaultStation]);
+    return { ok: true, created: true };
+  } finally { lock.releaseLock(); }
 }
 
 // ---- Chat / status feed -----------------------------------------------------
