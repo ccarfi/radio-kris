@@ -298,6 +298,7 @@ let player = null;           // YT.Player
 let ytReady = false;
 let tunedIn = false;         // has joined the broadcast (first gesture done)
 let playing = false;         // currently listening (false = locally paused)
+let extPausedTicks = 0;      // consecutive ticks the player was paused out from under us
 let loadedVideoId = '';
 let lastGongAtSeen = 0;
 let pendingAdvance = false;
@@ -593,15 +594,27 @@ function tick(){
   // boundary reached → advance for everyone
   if (total>0 && pos >= total - 0.15){ requestAdvance(false); return; }
 
-  // smart drift correction
+  // smart drift correction + detect an external pause (dialog/occlusion pauses the player)
   if (player && player.getCurrentTime && loadedVideoId === t.videoId){
     const st = player.getPlayerState ? player.getPlayerState() : -1;
     if (st === YT.PlayerState.PLAYING){
+      extPausedTicks = 0;
       const actual = player.getCurrentTime();
       if (Math.abs(actual - pos) > CONFIG.driftSec){ player.seekTo(pos, true); }
       $('np-state').textContent = 'ON AIR';
-    } else if (st === YT.PlayerState.PAUSED || st === YT.PlayerState.CUED){
-      $('np-state').textContent = 'TAP TO RESYNC';
+    } else if (st === YT.PlayerState.PAUSED){
+      // the browser paused us (confirm() dialog on remove, or the ADD modal occluding
+      // the player). Reflect it as paused so the button flips to RESUME after ~1s.
+      if (++extPausedTicks >= 2){
+        playing = false; extPausedTicks = 0;
+        stopHeartbeat();
+        updateTuneButton();
+        $('np-state').textContent = 'PAUSED';
+      } else {
+        $('np-state').textContent = 'PAUSING…';
+      }
+    } else {
+      extPausedTicks = 0;   // buffering/cued/unstarted — transient, don't flip
     }
   }
 }
