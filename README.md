@@ -83,4 +83,4 @@ Vanilla HTML/CSS/JS · YouTube IFrame Player + Data APIs · Google Apps Script �
 
 ---
 
-<sub>The first track on the flagship channel is a ~9-second recording of a 1989 Dodge Omni's transmission grinding itself to shrapnel — the startup sound of the original Radio KRIS. It stays.</sub>
+<sub>Radio KRIS is inspired by the original Radio KRIS, ca. 1998 (now long since defunct). The first track on the flagship channel is an homage to an old ~9-second recording of a 1989 Dodge Omni's transmission grinding itself to shrapnel — the startup sound of the original Radio KRIS. It stays.</sub>
