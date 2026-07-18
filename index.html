@@ -771,7 +771,7 @@ async function playTrack(t){
 }
 async function removeTrack(t){
   if (pendingRemoves.has(t.id)) return;                 // already in flight — ignore double-tap
-  if (!confirm('Remove "'+t.title+'" from the queue?')) return;
+  if (!confirm('Remove "'+t.title+'" from the queue for everyone?')) return;
   pendingRemoves.add(t.id);
   renderQueue();                                        // spinner + lock on this row immediately
   let ok = false;
