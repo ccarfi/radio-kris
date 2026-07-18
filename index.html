@@ -77,6 +77,22 @@
   .station-sub{color:var(--muted); font-size:11px; font-style:italic; padding:3px 8px 0; word-break:break-word;}
   .station-sub:empty{display:none;}
 
+  /* ---- chat / status ---- */
+  .chat-titlebar{cursor:pointer;}
+  #chat-caret{font-size:11px; transition:transform .1s;}
+  .chat-log{padding:5px 8px; overflow-y:auto; font-size:11px;}
+  .chat-log.collapsed{max-height:1.7em;}
+  .chat-log.expanded{max-height:130px;}
+  .chat-log.collapsed .chat-line:not(:last-child){display:none;}
+  .chat-line{padding:2px 0; word-break:break-word; line-height:1.35;}
+  .chat-line .who{color:var(--lcd-text);}
+  .chat-line.evt{color:var(--muted); font-style:italic;}
+  .chat-line.evt .who{color:var(--lcd-dim); font-style:normal;}
+  .chat-empty{color:var(--muted); padding:2px 0;}
+  .chat-input{display:flex; gap:6px; padding:6px 8px;}
+  .chat-input input{flex:1; min-width:0;}
+  .chat-input button{flex:none; min-width:52px;}
+
   /* ---- queue ---- */
   #queue{max-height:300px; overflow-y:auto;}
   .track{display:flex; align-items:center; gap:8px; padding:6px; border-bottom:1px solid #111;}
@@ -172,6 +188,18 @@
     <div class="listeners"><span id="presence">— tuning in</span></div>
   </div>
 
+  <!-- Chat / status -->
+  <div class="module bevel-out">
+    <div class="titlebar chat-titlebar" id="chat-toggle">
+      <span>CHAT</span><span id="chat-caret">▸</span>
+    </div>
+    <div id="chat-log" class="chat-log collapsed"></div>
+    <div class="chat-input">
+      <input id="chat-in" type="text" maxlength="200" placeholder="say something…" autocomplete="off" />
+      <button id="chat-send">SEND</button>
+    </div>
+  </div>
+
   <!-- Queue -->
   <div class="module bevel-out">
     <div class="titlebar"><span>QUEUE</span><span id="q-count">0</span></div>
@@ -212,6 +240,7 @@ const CONFIG = {
 let HANDLE = localStorage.getItem('rk_handle') || '';
 let station = localStorage.getItem('rk_station') || '';
 let STATION_SUBS = {};   // { stationName: subtitle } from getStations
+let chatCollapsed = localStorage.getItem('rk_chat_open') !== '1';  // default collapsed
 let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
@@ -285,6 +314,7 @@ async function api(action, params){
 function startApp(){
   $('shell').classList.remove('hidden');
   $('hello').textContent = '▸ ' + HANDLE;
+  applyChatCollapsed();
   loadYouTubeAPI();
   loadStations().then(()=>{
     pollState();
@@ -310,6 +340,63 @@ async function loadStations(){
 function renderStationSub(){
   const el = $('station-sub');
   if (el) el.textContent = STATION_SUBS[station] || '';
+}
+
+/* ---- chat / status window ---- */
+function chatLineText(m){
+  switch(m.type){
+    case 'gong':   return [m.name, ' gonged ', m.text || 'a track'];
+    case 'add':    return [m.name, ' added ' + (m.text||'a track') + ' to the queue'];
+    case 'remove': return [m.name, ' deleted ' + (m.text||'a track') + ' from the queue'];
+    case 'join':   return [m.name, ' has joined'];
+    default:       return [m.name + ':', ' ' + (m.text||'')];   // chat
+  }
+}
+
+function renderChat(items){
+  const log = $('chat-log');
+  if (!log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 4;
+  log.innerHTML = '';
+  if (!items || !items.length){
+    const e = document.createElement('div'); e.className='chat-empty'; e.textContent='— quiet in here —';
+    log.appendChild(e); return;
+  }
+  items.forEach(m=>{
+    const isChat = (m.type||'chat')==='chat';
+    const line = document.createElement('div');
+    line.className = 'chat-line' + (isChat ? '' : ' evt');
+    const [who, rest] = chatLineText(m);
+    const w = document.createElement('span'); w.className='who'; w.textContent = who;   // textContent = no HTML injection
+    line.appendChild(w);
+    line.appendChild(document.createTextNode(rest));
+    log.appendChild(line);
+  });
+  if (!chatCollapsed && atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function applyChatCollapsed(){
+  const log = $('chat-log'), caret = $('chat-caret');
+  if (!log) return;
+  log.classList.toggle('collapsed', chatCollapsed);
+  log.classList.toggle('expanded', !chatCollapsed);
+  if (caret) caret.textContent = chatCollapsed ? '▸' : '▾';
+  if (!chatCollapsed) log.scrollTop = log.scrollHeight;
+}
+
+function toggleChat(){
+  chatCollapsed = !chatCollapsed;
+  localStorage.setItem('rk_chat_open', chatCollapsed ? '0' : '1');
+  applyChatCollapsed();
+}
+
+async function sendChat(){
+  const inp = $('chat-in');
+  const text = (inp.value||'').trim();
+  if (!text || !station) return;
+  inp.value = '';
+  try{ await api('postChat', { station, by: HANDLE, text }); }catch(e){ /* transient */ }
+  pollState();   // pull the updated feed promptly instead of waiting for the next 4s tick
 }
 
 /* ============================ STATE SYNC ============================ */
@@ -340,6 +427,7 @@ function applyState(s){
   state = s;
   renderQueue();
   updateNowPlaying();
+  renderChat(s.chat || []);
 
   // Gong announcement (server is source of truth)
   if (s.lastGongAt && s.lastGongAt > lastGongAtSeen){
@@ -656,6 +744,7 @@ async function switchStation(name){
   station = name; localStorage.setItem('rk_station', name);
   state = null; loadedVideoId=''; lastGongAtSeen=0;
   renderStationSub();
+  renderChat([]);
   $('presence').textContent='— tuning in';
   await pollState();
   if (tunedIn){ const t=curTrack(); if (t) loadCurrent(true); if (playing) startHeartbeat(); }
@@ -683,6 +772,9 @@ $('btn-tune').onclick = onTuneButton;
 $('btn-gong').onclick = doGong;
 $('btn-add').onclick = openSearch;
 $('station-sel').onchange = e=> switchStation(e.target.value);
+$('chat-toggle').onclick = toggleChat;
+$('chat-send').onclick = sendChat;
+$('chat-in').addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
 $('search-go').onclick = runSearch;
 $('search-close').onclick = closeSearch;
 $('search-in').addEventListener('keydown', e=>{ if(e.key==='Enter') runSearch(); });
