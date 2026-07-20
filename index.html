@@ -147,6 +147,21 @@
   .vnet{font-size:11px; color:var(--muted); padding:1px 0; min-width:16px; text-align:center;}
   .vnet.pos{color:var(--lcd-text);}
   .vnet.neg{color:var(--red);}
+  /* loading skeleton (shimmer placeholder rows while a channel loads) */
+  .track.skel{pointer-events:none;}
+  .sk{background:#3d3d4b; border-radius:2px; position:relative; overflow:hidden;}
+  .sk::after{content:''; position:absolute; inset:0; transform:translateX(-100%);
+    background:linear-gradient(90deg, transparent, rgba(61,255,122,.16), transparent);
+    animation:shimmer 1.3s infinite;}
+  @keyframes shimmer{to{transform:translateX(100%);}}
+  .sk-vote{width:22px; height:38px; flex:none;}
+  .sk-img{width:40px; height:30px; flex:none;}
+  .sk-info{flex:1; min-width:0; display:flex; flex-direction:column; gap:7px;}
+  .sk-line{height:9px;}
+  .sk-line.long{width:72%;}
+  .sk-line.short{width:44%;}
+  .sk-dur{width:28px; height:9px; flex:none;}
+  .lcd.loading{opacity:.6;}
 
   /* ---- search modal ---- */
   .overlay{position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:12px; z-index:50;}
@@ -298,6 +313,7 @@ let pendingVotes = {};     // { trackId: value } optimistic, until the vote call
 let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort hash, sent on every call
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
+let loading = false;         // true while a channel's first getState is in flight
 let clockOffset = 0;         // serverNow - clientNow
 let player = null;           // YT.Player
 let ytReady = false;
@@ -371,8 +387,9 @@ function startApp(){
   $('hello').textContent = '▸ ' + HANDLE;
   applyChatCollapsed();
   loadYouTubeAPI();
-  loadStations().then(()=>{
-    pollState();
+  beginLoading(station || defaultStation || 'channel');
+  // fetch stations + state in parallel (was sequential) to shave a round-trip off first load
+  Promise.all([loadStations(), pollState()]).catch(()=>{}).finally(()=>{
     pollTimer = setInterval(pollState, CONFIG.pollMs);
     tickTimer = setInterval(tick, CONFIG.tickMs);
   });
@@ -491,6 +508,7 @@ function computedPos(){
 function applyState(s){
   const prevTrackId = state ? state.currentTrackId : null;
   state = s;
+  if (loading){ loading = false; const lcd = document.querySelector('.lcd'); if (lcd) lcd.classList.remove('loading'); }
   // votes: take server truth, then overlay any in-flight optimistic votes so they don't flicker
   VOTES = Object.assign({}, s.votes || {});
   const serverMy = s.myVotes || {};
@@ -585,6 +603,7 @@ async function requestAdvance(force){
 
 /* ============================ LOCAL TICK (sync + UI) ============================ */
 function tick(){
+  if (loading) return;   // channel still loading — leave the LOADING label + skeleton up
   const t = curTrack();
   const pos = computedPos();
   const total = t ? t.durationSec : 0;
@@ -735,9 +754,37 @@ function playGongSound(){
 }
 
 /* ============================ QUEUE RENDER ============================ */
+function skeletonRows(n){
+  let s = '';
+  for (let i=0; i<(n||5); i++){
+    s += '<div class="track skel">'
+       + '<div class="sk sk-vote"></div>'
+       + '<div class="sk sk-img"></div>'
+       + '<div class="sk-info"><div class="sk sk-line long"></div><div class="sk sk-line short"></div></div>'
+       + '<div class="sk sk-dur"></div>'
+       + '</div>';
+  }
+  return s;
+}
+
+// show the "loading channel" state immediately (skeleton queue + LCD label) so a
+// slow getState never looks empty/broken
+function beginLoading(name){
+  loading = true;
+  const lcd = document.querySelector('.lcd'); if (lcd) lcd.classList.add('loading');
+  $('marquee').textContent = '⟳ Loading ' + (name || 'channel') + '…';
+  $('np-by').textContent = '';
+  $('np-time').textContent = '--:--';
+  $('np-total').textContent = '';
+  $('np-state').textContent = 'LOADING';
+  renderQueue();
+}
+
 function renderQueue(){
+  const box = $('queue');
+  if (loading && !state){ box.innerHTML = skeletonRows(5); return; }
   const q = (state && state.queue) || [];
-  const box = $('queue'); box.innerHTML='';
+  box.innerHTML='';
   q.forEach((t)=>{
     const now = t.id === state.currentTrackId;
     const removing = pendingRemoves.has(t.id);
@@ -876,6 +923,7 @@ async function switchStation(name){
   renderStationSub();
   renderChat([]);
   $('presence').textContent='— tuning in';
+  beginLoading(name);
   await pollState();
   if (tunedIn){ const t=curTrack(); if (t) loadCurrent(true); if (playing) startHeartbeat(); }
 }
