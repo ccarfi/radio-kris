@@ -710,9 +710,34 @@ function startHeartbeat(){
 }
 function stopHeartbeat(){ if (hbTimer){ clearInterval(hbTimer); hbTimer = null; } }
 
+/* ============================ CONFIRM ============================ */
+// in-app confirmation — replaces native confirm(), which pauses the player and
+// is unreliable on iOS (can be suppressed). Pure DOM, never touches the player.
+function confirmModal(message, opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const ov = document.createElement('div');
+    ov.className = 'overlay'; ov.style.zIndex = 60;
+    ov.innerHTML =
+      '<div class="modal bevel-out" style="width:320px;max-width:100%;">' +
+        '<div class="titlebar"><span>'+ esc(opts.title || 'CONFIRM') +'</span></div>' +
+        '<div class="pad" style="font-size:12px;line-height:1.5;">'+ esc(message) +'</div>' +
+        '<div style="display:flex;gap:6px;padding:8px;justify-content:flex-end;">' +
+          '<button class="cf-no">CANCEL</button>' +
+          '<button class="cf-yes" style="border-color:var(--accent) var(--bevel-dark) var(--bevel-dark) var(--accent);color:var(--accent);">'+ esc(opts.ok || 'OK') +'</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    const done = (v)=>{ ov.remove(); resolve(v); };
+    ov.querySelector('.cf-yes').onclick = ()=> done(true);
+    ov.querySelector('.cf-no').onclick = ()=> done(false);
+    ov.addEventListener('click', (e)=>{ if (e.target === ov) done(false); });   // tap outside = cancel
+  });
+}
+
 /* ============================ GONG ============================ */
 async function doGong(){
-  if (!confirm('Gong this track for everyone?')) return;
+  if (!(await confirmModal('Gong this track for everyone?', {ok:'GONG'}))) return;
   $('btn-gong').disabled = true;
   try{
     const r = await api('gong', { station, by: HANDLE });
@@ -830,13 +855,13 @@ async function vote(t, dir){
 }
 
 async function playTrack(t){
-  if (!confirm('Play "'+t.title+'" for everyone now?')) return;
+  if (!(await confirmModal('Play "'+t.title+'" for everyone now?', {ok:'PLAY'}))) return;
   await api('playTrack', { station, id:t.id, by:HANDLE });
   pollState();
 }
 async function removeTrack(t){
   if (pendingRemoves.has(t.id)) return;                 // already in flight — ignore double-tap
-  if (!confirm('Remove "'+t.title+'" from the queue for everyone?')) return;
+  if (!(await confirmModal('Remove "'+t.title+'" from the queue for everyone?', {ok:'REMOVE'}))) return;
   pendingRemoves.add(t.id);
   renderQueue();                                        // spinner + lock on this row immediately
   let ok = false;
