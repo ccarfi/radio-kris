@@ -46,6 +46,8 @@ var CHAT_HEADERS = ['station', 'id', 'ts', 'type', 'name', 'text']; // type: cha
 var CHAT_KEEP = 10;                    // items kept per station (the configurable "10")
 var CHAT_MAX_LEN = 200;                // max chars for a typed chat message
 var JOIN_DEDUPE_MS = 5 * 60 * 1000;    // suppress repeat "joined" within this window
+// handles whose "joined" chat lines are muted (still counted in presence). lowercase.
+var JOIN_MUTE_HANDLES = ['genghis', 'genghis iphone'];
 
 // ---- Votes (per-track up/down; one vote per device per track per station) ----
 var VOTES_SHEET = 'Votes';
@@ -618,8 +620,10 @@ function heartbeat(station, handle) {
   listeners[handle] = true;
   // prune very old rows (delete bottom-up)
   staleRows.sort(function (a, b) { return b - a; }).forEach(function (r) { try { s.deleteRow(r); } catch (e) {} });
-  // surface a "joined" only when this handle is new or has been gone a while
-  if (handle && (prevSeen < 0 || now - prevSeen > JOIN_DEDUPE_MS)) {
+  // surface a "joined" only when this handle is new or has been gone a while,
+  // and isn't on the mute list (presence above is unaffected)
+  var muted = JOIN_MUTE_HANDLES.indexOf(String(handle).trim().toLowerCase()) !== -1;
+  if (handle && !muted && (prevSeen < 0 || now - prevSeen > JOIN_DEDUPE_MS)) {
     appendChat(station, 'join', handle, '');
   }
   var names = Object.keys(listeners);
