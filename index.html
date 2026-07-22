@@ -897,6 +897,7 @@ function closeSearch(){ $('search-modal').classList.add('hidden'); const b=$('se
 async function runSearch(){
   const q = $('search-in').value.trim(); if (!q) return;
   const box = $('search-results'); box.classList.remove('locked'); box.innerHTML = '<div class="pad tiny">searching…</div>';
+  const btn = $('search-go'); btn.classList.add('btn-spin'); btn.disabled = true;   // green spinner while searching
   try{
     const r = await api('search', { query:q });
     if (!r.ok){ box.innerHTML = '<div class="pad err">'+ esc(r.error||'search failed') +'</div>'; return; }
@@ -912,6 +913,7 @@ async function runSearch(){
       box.appendChild(d);
     });
   }catch(e){ box.innerHTML = '<div class="pad err">'+esc(String(e.message||e))+'</div>'; }
+  finally{ btn.classList.remove('btn-spin'); btn.disabled = false; }
 }
 
 async function addTrack(res, el){
