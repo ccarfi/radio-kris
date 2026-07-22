@@ -93,6 +93,7 @@
   /* ---- chat / status ---- */
   .chat-titlebar{cursor:pointer;}
   #chat-caret{font-size:16px; transition:transform .1s;}
+  .chat-toggle-r{display:flex; align-items:center; gap:6px;}
   .chat-log{padding:5px 8px; overflow-y:auto; font-size:11px;}
   .chat-log.collapsed{max-height:1.7em;}
   .chat-log.expanded{max-height:130px;}
@@ -256,7 +257,8 @@
   <!-- Chat / status -->
   <div class="module bevel-out">
     <div class="titlebar chat-titlebar" id="chat-toggle">
-      <span>CHAT</span><span id="chat-caret">▸</span>
+      <span>CHAT</span>
+      <span class="chat-toggle-r"><span id="chat-hint" class="chan-hint">tap to expand</span><span id="chat-caret">▸</span></span>
     </div>
     <div id="chat-log" class="chat-log collapsed"></div>
     <div class="chat-input">
@@ -461,6 +463,7 @@ function applyChatCollapsed(){
   log.classList.toggle('collapsed', chatCollapsed);
   log.classList.toggle('expanded', !chatCollapsed);
   if (caret) caret.textContent = chatCollapsed ? '▸' : '▾';
+  const hint = $('chat-hint'); if (hint) hint.textContent = chatCollapsed ? 'tap to expand' : 'tap to collapse';
   if (!chatCollapsed) log.scrollTop = log.scrollHeight;
 }
 
