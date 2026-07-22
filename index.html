@@ -111,6 +111,11 @@
     width:12px; height:12px; margin:-7px 0 0 -6px; border:2px solid var(--muted);
     border-top-color:var(--lcd-text); border-radius:50%; animation:btnspin .6s linear infinite;}
   @keyframes btnspin{to{transform:rotate(360deg);}}
+  /* generic in-flight spinner for any button (hides label, spins a ring) */
+  .btn-spin{color:transparent !important; position:relative; pointer-events:none;}
+  .btn-spin::after{content:''; position:absolute; top:50%; left:50%; width:12px; height:12px;
+    margin:-7px 0 0 -6px; border:2px solid var(--muted); border-top-color:var(--lcd-text);
+    border-radius:50%; animation:btnspin .6s linear infinite;}
   /* in-flight indicators for add/remove (reuse btnspin) */
   .track.removing{opacity:.5;}
   .track .x.spin{color:transparent; pointer-events:none; position:relative;}
@@ -728,10 +733,18 @@ function confirmModal(message, opts){
         '</div>' +
       '</div>';
     document.body.appendChild(ov);
+    const yes = ov.querySelector('.cf-yes'), no = ov.querySelector('.cf-no');
+    let busy = false;
     const done = (v)=>{ ov.remove(); resolve(v); };
-    ov.querySelector('.cf-yes').onclick = ()=> done(true);
-    ov.querySelector('.cf-no').onclick = ()=> done(false);
-    ov.addEventListener('click', (e)=>{ if (e.target === ov) done(false); });   // tap outside = cancel
+    yes.onclick = async ()=>{
+      if (!opts.onConfirm){ done(true); return; }   // simple confirm — resolve immediately
+      // spin the action button while the async work runs, then close
+      busy = true; yes.classList.add('btn-spin'); no.disabled = true;
+      try{ await opts.onConfirm(); }catch(e){}
+      done(true);
+    };
+    no.onclick = ()=>{ if (!busy) done(false); };
+    ov.addEventListener('click', (e)=>{ if (!busy && e.target === ov) done(false); });   // tap outside = cancel
   });
 }
 
@@ -855,9 +868,11 @@ async function vote(t, dir){
 }
 
 async function playTrack(t){
-  if (!(await confirmModal('Play "'+t.title+'" for everyone now?', {ok:'PLAY'}))) return;
-  await api('playTrack', { station, id:t.id, by:HANDLE });
-  pollState();
+  // spinner stays on the PLAY button until the station has actually re-cued
+  await confirmModal('Play "'+t.title+'" for everyone now?', {
+    ok: 'PLAY',
+    onConfirm: async ()=>{ await api('playTrack', { station, id:t.id, by:HANDLE }); pollState(); }
+  });
 }
 async function removeTrack(t){
   if (pendingRemoves.has(t.id)) return;                 // already in flight — ignore double-tap
