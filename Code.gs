@@ -95,6 +95,7 @@ function handle(data) {
       case 'addTrack':      out = addTrack(data); break;
       case 'removeTrack':   out = removeTrack(data.station, data.id, data.by); break;
       case 'playTrack':     out = playTrack(data.station, data.id, data.by); break;
+      case 'reorder':       out = reorder(data.station, data.id, data.newIndex); break;
       case 'gong':          out = gong(data.station, data.by); break;
       case 'postChat':      out = postChat(data.station, data.by, data.text); break;
       case 'advance':       out = advance(data.station, data.expectedTrackId, data.force); break;
@@ -548,6 +549,27 @@ function playTrack(station, id, by) {
     meta.trackStartedAt = Date.now();
     writeMeta(meta);
     return { ok: true };
+  } finally { lock.releaseLock(); }
+}
+
+/** Move a track to newIndex, rewriting the queue rows in the new order. Current
+ *  track is tracked by id, so playback/clock are unaffected by the reorder. */
+function reorder(station, id, newIndex) {
+  var lock = LockService.getScriptLock(); lock.tryLock(LOCK_WAIT_MS);
+  try {
+    var s = getStationSheet(station);
+    var queue = readQueue(station);
+    var from = indexOfId(queue, id);
+    if (from === -1) return { ok: false, error: 'no such track' };
+    var to = Math.max(0, Math.min(Number(newIndex) || 0, queue.length - 1));
+    if (from === to) return { ok: true, moved: false };
+    var arr = queue.slice();
+    arr.splice(to, 0, arr.splice(from, 1)[0]);        // move the row's object
+    var values = arr.map(function (t) {
+      return [t.id, t.videoId, t.title, t.artist, t.durationSec, t.thumbnailUrl, t.addedBy, t.addedAt];
+    });
+    s.getRange(2, 1, values.length, STATION_HEADERS.length).setValues(values);
+    return { ok: true, moved: true };
   } finally { lock.releaseLock(); }
 }
 

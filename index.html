@@ -153,6 +153,11 @@
   .vnet{font-size:11px; color:var(--muted); padding:1px 0; min-width:16px; text-align:center;}
   .vnet.pos{color:var(--lcd-text);}
   .vnet.neg{color:var(--red);}
+  /* drag-to-reorder grip (leading edge of each row) */
+  .grip{flex:none; width:16px; text-align:center; color:#6f6f81; font-size:13px; line-height:.72;
+    letter-spacing:1px; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none;}
+  .grip:active{cursor:grabbing;}
+  .track.dragging{opacity:.92; background:#2f2f3d; box-shadow:0 3px 10px rgba(0,0,0,.55);}
   /* loading skeleton (shimmer placeholder rows while a channel loads) */
   .track.skel{pointer-events:none;}
   .sk{background:#3d3d4b; border-radius:2px; position:relative; overflow:hidden;}
@@ -321,6 +326,8 @@ let authToken = localStorage.getItem('rk_auth') || '';   // validated cohort has
 let defaultStation = '';     // cohort's landing playlist (from login)
 let state = null;            // last server state
 let loading = false;         // true while a channel's first getState is in flight
+let dragging = false;        // true while a queue row is being drag-reordered
+let pendingOrderIds = null;  // optimistic queue order (ids) until the server reflects the reorder
 let clockOffset = 0;         // serverNow - clientNow
 let player = null;           // YT.Player
 let ytReady = false;
@@ -525,6 +532,7 @@ function applyState(s){
     VOTES[id] = (VOTES[id] || 0) + (pendingVotes[id] - (serverMy[id] || 0));
     MY_VOTES[id] = pendingVotes[id];
   }
+  if (pendingOrderIds) s.queue = applyPendingOrder(s.queue || []);   // keep the just-dragged order until the server catches up
   renderQueue();
   updateNowPlaying();
   renderChat(s.chat || []);
@@ -822,6 +830,7 @@ function beginLoading(name){
 }
 
 function renderQueue(){
+  if (dragging) return;                              // don't rebuild the list mid-drag
   const box = $('queue');
   if (loading && !state){ box.innerHTML = skeletonRows(5); return; }
   const q = (state && state.queue) || [];
@@ -834,7 +843,9 @@ function renderQueue(){
     const netCls = net>0 ? ' pos' : (net<0 ? ' neg' : '');
     const row = document.createElement('div');
     row.className = 'track' + (now?' now':'') + (removing?' removing':'');
+    row.dataset.id = t.id;
     row.innerHTML =
+      '<span class="grip" aria-label="drag to reorder">⋮⋮</span>' +
       '<div class="vote">' +
         '<button class="vup'+(mine>0?' on':'')+'" aria-label="upvote">▲</button>' +
         '<span class="vnet'+netCls+'">'+ net +'</span>' +
@@ -851,8 +862,70 @@ function renderQueue(){
     row.querySelector('.vup').onclick = (e)=>{ e.stopPropagation(); vote(t, 1); };
     row.querySelector('.vdn').onclick = (e)=>{ e.stopPropagation(); vote(t, -1); };
     row.querySelector('.x').onclick = (e)=>{ e.stopPropagation(); removeTrack(t); };
+    if (!removing) row.querySelector('.grip').addEventListener('pointerdown', (e)=> startDrag(e, t.id, row));
     box.appendChild(row);
   });
+}
+
+/* ---- drag-to-reorder (pointer events: works with mouse + touch) ---- */
+function applyPendingOrder(queue){
+  if (!pendingOrderIds) return queue;
+  const byId = {}; queue.forEach(t=> byId[t.id] = t);
+  const ordered = [];
+  pendingOrderIds.forEach(id=>{ if (byId[id]){ ordered.push(byId[id]); delete byId[id]; } });
+  queue.forEach(t=>{ if (byId[t.id]) ordered.push(t); });        // tracks added by others land at the end
+  if (queue.map(t=>t.id).join(',') === ordered.map(t=>t.id).join(',')) pendingOrderIds = null;  // server caught up
+  return ordered;
+}
+
+function startDrag(e, id, row){
+  if (dragging) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;       // left mouse only
+  e.preventDefault();
+  dragging = true;
+  row.classList.add('dragging');
+  const box = $('queue');
+  let lastY = e.clientY, raf = null;
+  const reposition = (y)=>{
+    const rows = [...box.querySelectorAll('.track:not(.dragging):not(.skel)')];
+    let before = null;
+    for (const other of rows){
+      const ob = other.getBoundingClientRect();
+      if (y < ob.top + ob.height/2){ before = other; break; }
+    }
+    if (before) box.insertBefore(row, before); else box.appendChild(row);
+  };
+  const onMove = (ev)=>{ ev.preventDefault(); lastY = ev.clientY; reposition(lastY); };
+  const autoscroll = ()=>{                                       // scroll the queue when dragging near its edges
+    const r = box.getBoundingClientRect(), edge = 30, step = 9;
+    if (lastY < r.top + edge && box.scrollTop > 0){ box.scrollTop -= step; reposition(lastY); }
+    else if (lastY > r.bottom - edge && box.scrollTop < box.scrollHeight - box.clientHeight){ box.scrollTop += step; reposition(lastY); }
+    if (dragging) raf = requestAnimationFrame(autoscroll);
+  };
+  const end = ()=>{
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', end);
+    document.removeEventListener('pointercancel', end);
+    if (raf) cancelAnimationFrame(raf);
+    row.classList.remove('dragging');
+    dragging = false;
+    finalizeDrag(id, box);
+  };
+  document.addEventListener('pointermove', onMove, {passive:false});
+  document.addEventListener('pointerup', end);
+  document.addEventListener('pointercancel', end);
+  raf = requestAnimationFrame(autoscroll);
+}
+
+function finalizeDrag(id, box){
+  const ids = [...box.querySelectorAll('.track:not(.skel)')].map(r=> r.dataset.id);
+  const serverIds = ((state && state.queue) || []).map(t=> t.id);
+  if (ids.join(',') === serverIds.join(',')){ renderQueue(); return; }   // no change → normalize DOM
+  pendingOrderIds = ids;
+  const byId = {}; (state.queue||[]).forEach(t=> byId[t.id] = t);
+  state.queue = ids.map(i=> byId[i]).filter(Boolean);                    // optimistic local order
+  renderQueue();
+  api('reorder', { station, id, newIndex: ids.indexOf(id), by: HANDLE }).then(()=> pollState()).catch(()=>{});
 }
 
 // up/down vote a track (toggles off if you tap the same arrow again). Optimistic + reconciled by poll.
