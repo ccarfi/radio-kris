@@ -801,11 +801,20 @@ function promptModal(message, defValue, opts){
       '</div>';
     document.body.appendChild(ov);
     const inp = ov.querySelector('.pm-in'); inp.value = defValue || '';
+    const yes = ov.querySelector('.cf-yes'), no = ov.querySelector('.cf-no');
+    let busy = false;
     const done = (v)=>{ ov.remove(); resolve(v); };
-    ov.querySelector('.cf-yes').onclick = ()=> done(inp.value);
-    ov.querySelector('.cf-no').onclick = ()=> done(null);
-    ov.addEventListener('click', (e)=>{ if (e.target === ov) done(null); });
-    inp.addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); done(inp.value); } else if (e.key==='Escape'){ done(null); } });
+    const submit = async ()=>{                       // spin SAVE while an optional async action runs
+      if (busy) return;
+      if (!opts.onConfirm){ done(inp.value); return; }
+      busy = true; yes.classList.add('btn-spin'); no.disabled = true; inp.disabled = true;
+      try{ await opts.onConfirm(inp.value); }catch(e){}
+      done(inp.value);
+    };
+    yes.onclick = submit;
+    no.onclick = ()=>{ if (!busy) done(null); };
+    ov.addEventListener('click', (e)=>{ if (!busy && e.target === ov) done(null); });
+    inp.addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); submit(); } else if (e.key==='Escape'){ if (!busy) done(null); } });
     setTimeout(()=>{ inp.focus(); inp.select(); }, 30);
   });
 }
@@ -1140,13 +1149,17 @@ function setHandle(){
 }
 async function editHandle(){
   const old = HANDLE;
-  const v = await promptModal('New DJ handle:', HANDLE, { title:'DJ HANDLE', ok:'SAVE', maxlength:24 });
-  const nv = v && v.trim();
-  if (nv && nv !== old){
-    HANDLE = nv; localStorage.setItem('rk_handle', HANDLE); $('hello-name').textContent = HANDLE;
-    // surface handle changes in the channel chat (friction/transparency vs sock puppetry)
-    if (old) api('postChat', { station, by: old, text: 'changed handle to "'+HANDLE+'"' }).then(()=> pollState()).catch(()=>{});
-  }
+  await promptModal('New DJ handle:', HANDLE, {
+    title:'DJ HANDLE', ok:'SAVE', maxlength:24,
+    // SAVE spins until the handle change + its chat line land
+    onConfirm: async (v)=>{
+      const nv = v && v.trim();
+      if (!nv || nv === old) return;
+      HANDLE = nv; localStorage.setItem('rk_handle', HANDLE); $('hello-name').textContent = HANDLE;
+      // surface handle changes in the channel chat (friction/transparency vs sock puppetry)
+      if (old){ try{ await api('postChat', { station, by: old, text: 'changed handle to "'+HANDLE+'"' }); }catch(e){} pollState(); }
+    }
+  });
 }
 
 async function logOut(){
