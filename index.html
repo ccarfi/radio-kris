@@ -191,6 +191,13 @@
   .result img{width:48px;height:36px;object-fit:cover;background:#000;flex:none;}
   .search-row{display:flex; gap:6px; padding:8px;}
   .search-row input{flex:1;}
+  /* export playlist table */
+  .ex-body{overflow:auto; padding:0 8px 8px;}
+  .ex-table{width:100%; border-collapse:collapse; font-size:11px;}
+  .ex-table th{position:sticky; top:0; background:var(--panel); text-align:left; color:var(--lcd-text);
+    padding:6px; border-bottom:2px solid var(--bevel-dark); white-space:nowrap;}
+  .ex-table td{padding:5px 6px; border-bottom:1px solid #111; vertical-align:top; word-break:break-word;}
+  .ex-table a{color:var(--lcd-dim);}
 
   /* ---- toast ---- */
   #toast{position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:100;
@@ -234,6 +241,7 @@
         <span id="hello" style="font-weight:normal;cursor:pointer;"><span id="hello-name">handle</span> <span class="burger" aria-hidden="true">&#9776;</span></span>
         <div id="app-menu" class="app-menu hidden" role="menu">
           <div class="menu-item" id="mi-handle" role="menuitem">Change DJ handle</div>
+          <div class="menu-item" id="mi-export" role="menuitem">Export current playlist</div>
         </div>
       </div>
     </div>
@@ -772,6 +780,68 @@ function confirmModal(message, opts){
   });
 }
 
+// in-app text prompt (matches confirmModal; replaces native prompt()). Resolves to the string, or null on cancel.
+function promptModal(message, defValue, opts){
+  opts = opts || {};
+  return new Promise(resolve=>{
+    const ov = document.createElement('div');
+    ov.className = 'overlay'; ov.style.zIndex = 60;
+    ov.innerHTML =
+      '<div class="modal bevel-out" style="width:320px;max-width:100%;">' +
+        '<div class="titlebar"><span>'+ esc(opts.title || 'INPUT') +'</span></div>' +
+        '<div class="pad" style="font-size:12px;line-height:1.5;">'+ esc(message) +
+          '<input class="pm-in" type="text" maxlength="'+ (opts.maxlength || 40) +'" autocomplete="off" style="width:100%;box-sizing:border-box;margin-top:8px;">' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;padding:8px;justify-content:flex-end;">' +
+          '<button class="cf-no">CANCEL</button>' +
+          '<button class="cf-yes" style="border-color:var(--lcd-text) var(--bevel-dark) var(--bevel-dark) var(--lcd-text);color:var(--lcd-text);">'+ esc(opts.ok || 'OK') +'</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    const inp = ov.querySelector('.pm-in'); inp.value = defValue || '';
+    const done = (v)=>{ ov.remove(); resolve(v); };
+    ov.querySelector('.cf-yes').onclick = ()=> done(inp.value);
+    ov.querySelector('.cf-no').onclick = ()=> done(null);
+    ov.addEventListener('click', (e)=>{ if (e.target === ov) done(null); });
+    inp.addEventListener('keydown', (e)=>{ if (e.key==='Enter'){ e.preventDefault(); done(inp.value); } else if (e.key==='Escape'){ done(null); } });
+    setTimeout(()=>{ inp.focus(); inp.select(); }, 30);
+  });
+}
+
+// export the current channel's queue as a Title / Artist / URL table
+function exportPlaylist(){
+  const q = (state && state.queue) || [];
+  const url = (t)=> 'https://www.youtube.com/watch?v=' + t.videoId;
+  const rows = q.length
+    ? q.map(t=> '<tr><td>'+esc(t.title)+'</td><td>'+esc(t.artist)+'</td><td><a href="'+esc(url(t))+'" target="_blank" rel="noopener">'+esc(url(t))+'</a></td></tr>').join('')
+    : '<tr><td colspan="3" class="tiny" style="padding:10px;">— empty —</td></tr>';
+  const ov = document.createElement('div');
+  ov.className = 'overlay'; ov.style.zIndex = 60;
+  ov.innerHTML =
+    '<div class="modal bevel-out" style="width:560px;max-width:100%;max-height:85vh;display:flex;flex-direction:column;">' +
+      '<div class="titlebar"><span>EXPORT — '+ esc(station || 'playlist') +'</span><span class="ex-x" style="cursor:pointer;">✕</span></div>' +
+      '<div class="ex-body">' +
+        '<table class="ex-table"><thead><tr><th>Title</th><th>Artist</th><th>URL</th></tr></thead><tbody>'+ rows +'</tbody></table>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;padding:8px;justify-content:flex-end;">' +
+        '<button class="ex-copy">COPY</button>' +
+        '<button class="cf-yes" style="border-color:var(--lcd-text) var(--bevel-dark) var(--bevel-dark) var(--lcd-text);color:var(--lcd-text);">CLOSE</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = ()=> ov.remove();
+  ov.querySelector('.ex-x').onclick = close;
+  ov.querySelector('.cf-yes').onclick = close;
+  ov.addEventListener('click', (e)=>{ if (e.target === ov) close(); });
+  ov.querySelector('.ex-copy').onclick = (e)=>{
+    const tsv = 'Title\tArtist\tURL\n' + q.map(t=> [t.title, t.artist, url(t)].join('\t')).join('\n');
+    const btn = e.target;
+    (navigator.clipboard ? navigator.clipboard.writeText(tsv) : Promise.reject())
+      .then(()=>{ btn.textContent='COPIED'; setTimeout(()=> btn.textContent='COPY', 1200); })
+      .catch(()=>{ btn.textContent='COPY FAILED'; setTimeout(()=> btn.textContent='COPY', 1200); });
+  };
+}
+
 /* ============================ GONG ============================ */
 async function doGong(){
   if (!(await confirmModal('Gong this track for everyone?', {ok:'GONG'}))) return;
@@ -1066,8 +1136,8 @@ function setHandle(){
   $('handle').classList.add('hidden');
   startApp();
 }
-function editHandle(){
-  const v = prompt('New DJ handle:', HANDLE);
+async function editHandle(){
+  const v = await promptModal('New DJ handle:', HANDLE, { title:'DJ HANDLE', ok:'SAVE', maxlength:24 });
   if (v && v.trim()){ HANDLE = v.trim(); localStorage.setItem('rk_handle',HANDLE); $('hello-name').textContent = HANDLE; }
 }
 
@@ -1078,6 +1148,7 @@ $('handle-go').onclick = setHandle;
 $('handle-in').addEventListener('keydown', e=>{ if(e.key==='Enter') setHandle(); });
 $('hello').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.toggle('hidden'); };
 $('mi-handle').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); editHandle(); };
+$('mi-export').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); exportPlaylist(); };
 document.addEventListener('click', (e)=>{ if (!e.target.closest('.apphead-menu')) $('app-menu').classList.add('hidden'); });
 $('btn-tune').onclick = onTuneButton;
 $('btn-gong').onclick = doGong;
