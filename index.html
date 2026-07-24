@@ -42,6 +42,7 @@
     border:2px solid; border-color:var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
     box-shadow:0 5px 16px rgba(0,0,0,.55);}
   .menu-item{padding:9px 12px; font-size:12px; color:var(--text); cursor:pointer; white-space:nowrap;}
+  .menu-item.sep{border-top:1px solid var(--bevel-dark);}
   .menu-item:hover, .menu-item:active{background:var(--lcd); color:var(--lcd-text);}
 
   /* ---- Shell ---- */
@@ -242,6 +243,7 @@
         <div id="app-menu" class="app-menu hidden" role="menu">
           <div class="menu-item" id="mi-handle" role="menuitem">Change DJ handle</div>
           <div class="menu-item" id="mi-export" role="menuitem">Export current playlist</div>
+          <div class="menu-item sep" id="mi-logout" role="menuitem">Log out</div>
         </div>
       </div>
     </div>
@@ -1137,8 +1139,20 @@ function setHandle(){
   startApp();
 }
 async function editHandle(){
+  const old = HANDLE;
   const v = await promptModal('New DJ handle:', HANDLE, { title:'DJ HANDLE', ok:'SAVE', maxlength:24 });
-  if (v && v.trim()){ HANDLE = v.trim(); localStorage.setItem('rk_handle',HANDLE); $('hello-name').textContent = HANDLE; }
+  const nv = v && v.trim();
+  if (nv && nv !== old){
+    HANDLE = nv; localStorage.setItem('rk_handle', HANDLE); $('hello-name').textContent = HANDLE;
+    // surface handle changes in the channel chat (friction/transparency vs sock puppetry)
+    if (old) api('postChat', { station, by: old, text: 'changed handle to "'+HANDLE+'"' }).then(()=> pollState()).catch(()=>{});
+  }
+}
+
+async function logOut(){
+  if (!(await confirmModal('Log out of Radio KRIS?', { ok:'LOG OUT' }))) return;
+  localStorage.removeItem('rk_auth');   // clears the cohort token; handle is kept
+  location.reload();                    // back to the password gate
 }
 
 /* ============================ WIRING ============================ */
@@ -1149,6 +1163,7 @@ $('handle-in').addEventListener('keydown', e=>{ if(e.key==='Enter') setHandle();
 $('hello').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.toggle('hidden'); };
 $('mi-handle').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); editHandle(); };
 $('mi-export').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); exportPlaylist(); };
+$('mi-logout').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); logOut(); };
 document.addEventListener('click', (e)=>{ if (!e.target.closest('.apphead-menu')) $('app-menu').classList.add('hidden'); });
 $('btn-tune').onclick = onTuneButton;
 $('btn-gong').onclick = doGong;
