@@ -35,6 +35,14 @@
   .apphead .brand{display:flex; flex-direction:column; line-height:1.05; font-size:21px; letter-spacing:1px;}
   .apphead .brand-url{font-size:11px; font-weight:normal; letter-spacing:1px; color:var(--lcd-text); text-shadow:none; margin-top:2px;}
   .apphead #hello{font-size:13px;}
+  .apphead .burger{font-size:15px; vertical-align:-1px;}
+  .apphead-menu{position:relative;}
+  .app-menu{position:absolute; right:0; top:calc(100% + 5px); z-index:45; min-width:160px;
+    background:var(--panel); text-shadow:none; font-weight:normal; letter-spacing:0;
+    border:2px solid; border-color:var(--bevel-light) var(--bevel-dark) var(--bevel-dark) var(--bevel-light);
+    box-shadow:0 5px 16px rgba(0,0,0,.55);}
+  .menu-item{padding:9px 12px; font-size:12px; color:var(--text); cursor:pointer; white-space:nowrap;}
+  .menu-item:hover, .menu-item:active{background:var(--lcd); color:var(--lcd-text);}
 
   /* ---- Shell ---- */
   #shell{width:420px; max-width:100%;}
@@ -222,7 +230,12 @@
   <div class="module bevel-out">
     <div class="titlebar apphead">
       <span class="brand">RADIO KRIS<span class="brand-url">radiokris.org</span></span>
-      <span id="hello" style="font-weight:normal;cursor:pointer;">▸ handle</span>
+      <div class="apphead-menu">
+        <span id="hello" style="font-weight:normal;cursor:pointer;"><span id="hello-name">handle</span> <span class="burger" aria-hidden="true">&#9776;</span></span>
+        <div id="app-menu" class="app-menu hidden" role="menu">
+          <div class="menu-item" id="mi-handle" role="menuitem">Change DJ handle</div>
+        </div>
+      </div>
     </div>
     <div class="pad">
       <div class="lcd bevel-in">
@@ -398,7 +411,7 @@ async function api(action, params){
 /* ============================ APP BOOT ============================ */
 function startApp(){
   $('shell').classList.remove('hidden');
-  $('hello').textContent = '▸ ' + HANDLE;
+  $('hello-name').textContent = HANDLE;
   applyChatCollapsed();
   loadYouTubeAPI();
   beginLoading(station || defaultStation || 'channel');
@@ -1055,7 +1068,7 @@ function setHandle(){
 }
 function editHandle(){
   const v = prompt('New DJ handle:', HANDLE);
-  if (v && v.trim()){ HANDLE = v.trim(); localStorage.setItem('rk_handle',HANDLE); $('hello').textContent='▸ '+HANDLE; }
+  if (v && v.trim()){ HANDLE = v.trim(); localStorage.setItem('rk_handle',HANDLE); $('hello-name').textContent = HANDLE; }
 }
 
 /* ============================ WIRING ============================ */
@@ -1063,7 +1076,9 @@ $('pw-go').onclick = tryUnlock;
 $('pw').addEventListener('keydown', e=>{ if(e.key==='Enter') tryUnlock(); });
 $('handle-go').onclick = setHandle;
 $('handle-in').addEventListener('keydown', e=>{ if(e.key==='Enter') setHandle(); });
-$('hello').onclick = editHandle;
+$('hello').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.toggle('hidden'); };
+$('mi-handle').onclick = (e)=>{ e.stopPropagation(); $('app-menu').classList.add('hidden'); editHandle(); };
+document.addEventListener('click', (e)=>{ if (!e.target.closest('.apphead-menu')) $('app-menu').classList.add('hidden'); });
 $('btn-tune').onclick = onTuneButton;
 $('btn-gong').onclick = doGong;
 $('btn-add').onclick = openSearch;
